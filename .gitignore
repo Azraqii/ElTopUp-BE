@@ -1,0 +1,30 @@
+# --- Dependencies ---
+node_modules/
+package-lock.json # (Opsional: Banyak orang menyimpannya, tapi jika ingin bersih boleh di-ignore)
+
+# --- Production Build ---
+dist/
+build/
+
+# --- Environment Variables (KEAMANAN KRUSIAL) ---
+.env
+.env.local
+.env.*
+
+# --- Logs ---
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+logs/
+*.log
+
+# --- OS Files (Penting karena Anda pakai Mac) ---
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+
+# --- Editor / IDE ---
+.vscode/
+.idea/
+*.swp
