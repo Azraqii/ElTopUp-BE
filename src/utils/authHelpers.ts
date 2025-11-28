@@ -1,11 +1,14 @@
-// src/utils/authHelpers.ts
-
 import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
-import type { IUser } from '../models/userModel';
 
-export const generateToken = (id: mongoose.Types.ObjectId): string => {
-  return jwt.sign({ id }, process.env.JWT_SECRET as string, {
+// Terima parameter sebagai string atau ObjectId
+export const generateToken = (id: string | mongoose.Types.ObjectId): string => {
+  // Pastikan SECRET ada
+  if (!process.env.JWT_SECRET) {
+    throw new Error("JWT_SECRET belum disetting di file .env");
+  }
+  
+  return jwt.sign({ id }, process.env.JWT_SECRET, {
     expiresIn: '7d',
   });
 };

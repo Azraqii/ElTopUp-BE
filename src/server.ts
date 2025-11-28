@@ -1,10 +1,11 @@
-// src/server.ts
-
 import express, { type Request, type Response } from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
 import mongoose from 'mongoose';
+
+// Import Routes
 import userRoutes from './routes/userRoutes';
+import orderRoutes from './routes/orderRoutes'; // <--- PENTING: Import route order
 
 dotenv.config();
 
@@ -17,8 +18,14 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// --- Routes ---
+// --- Routes Registration ---
 app.use('/api/users', userRoutes);
+app.use('/api/orders', orderRoutes); // <--- PENTING: Daftarkan endpoint /api/orders
+
+// Default Route (Untuk cek apakah server nyala di browser)
+app.get('/', (req: Request, res: Response) => {
+  res.send('API El TopUp is Running...');
+});
 
 // --- Connect DB & Start Server ---
 const connectDB = async () => {
@@ -27,6 +34,7 @@ const connectDB = async () => {
         return;
     }
     try {
+        console.log("⏳ Sedang mencoba koneksi ke MongoDB...");
         await mongoose.connect(MONGO_URI);
         console.log('✅ MongoDB connected successfully!');
     } catch (error) {

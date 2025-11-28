@@ -5,7 +5,7 @@ import bcrypt from 'bcryptjs';
 
 export interface IUser extends Document {
   email: string;
-  password: string; // Kembali wajib
+  password: string; 
   role: 'user' | 'admin';
   comparePassword(candidatePassword: string): Promise<boolean>;
 }
@@ -20,7 +20,7 @@ const UserSchema: Schema = new Schema({
   },
   password: {
     type: String,
-    required: [true, 'Password wajib diisi'], // Wajib lagi
+    required: [true, 'Password wajib diisi'],
     minlength: 6,
     select: false,
   },
@@ -33,16 +33,23 @@ const UserSchema: Schema = new Schema({
   timestamps: true
 });
 
-// Middleware Hash Password
-UserSchema.pre<IUser>('save', async function () { 
-  if (!this.isModified('password')) {
-    return; 
+// --- PERBAIKAN DI SINI ---
+// Hapus parameter 'next'. Gunakan async function murni.
+UserSchema.pre('save', async function () { 
+  // 'this' mengacu pada dokumen user yang sedang diproses
+  // Kita cast 'this' sebagai any atau IUser agar TS tidak rewel soal properti password
+  const user = this as any; 
+
+  if (!user.isModified('password')) {
+    return; // Langsung return tanpa next()
   }
+
   try {
     const salt = await bcrypt.genSalt(10);
-    this.password = await bcrypt.hash(this.password, salt);
+    user.password = await bcrypt.hash(user.password, salt);
+    // Tidak perlu panggil next() di akhir, karena async function otomatis lanjut kalau tidak error
   } catch (error) {
-    throw new Error("Gagal mengenkripsi password."); 
+    throw new Error("Gagal mengenkripsi password."); // Lempar error agar save dibatalkan
   }
 });
 
