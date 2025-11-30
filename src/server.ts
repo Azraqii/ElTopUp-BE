@@ -5,7 +5,11 @@ import mongoose from 'mongoose';
 
 // Import Routes
 import userRoutes from './routes/userRoutes';
-import orderRoutes from './routes/orderRoutes'; // <--- PENTING: Import route order
+import orderRoutes from './routes/orderRoutes';
+import gameRoutes from './routes/gameRoutes';
+import adminRoutes from './routes/adminRoutes';
+// itemRoutes DIHAPUS karena fungsinya sudah dipindah ke adminRoutes
+import robloxRoutes from './routes/robloxRoutes';
 
 dotenv.config();
 
@@ -14,27 +18,24 @@ const MONGO_URI: string = process.env.MONGO_URI || '';
 
 const app = express();
 
-// --- Middleware ---
 app.use(cors());
 app.use(express.json());
 
 // --- Routes Registration ---
 app.use('/api/users', userRoutes);
-app.use('/api/orders', orderRoutes); // <--- PENTING: Daftarkan endpoint /api/orders
+app.use('/api/orders', orderRoutes);
+app.use('/api/games', gameRoutes);
+app.use('/api/admin', adminRoutes);
+// app.use('/api/items', itemRoutes); // DIHAPUS
+app.use('/api/roblox', robloxRoutes);
 
-// Default Route (Untuk cek apakah server nyala di browser)
 app.get('/', (req: Request, res: Response) => {
   res.send('API El TopUp is Running...');
 });
 
-// --- Connect DB & Start Server ---
 const connectDB = async () => {
-    if (!MONGO_URI) {
-        console.warn("⚠️ MONGO_URI is not set in .env");
-        return;
-    }
+    if (!MONGO_URI) return;
     try {
-        console.log("⏳ Sedang mencoba koneksi ke MongoDB...");
         await mongoose.connect(MONGO_URI);
         console.log('✅ MongoDB connected successfully!');
     } catch (error) {
