@@ -10,6 +10,7 @@ import gameRoutes from './routes/gameRoutes';
 import adminRoutes from './routes/adminRoutes';
 // itemRoutes DIHAPUS karena fungsinya sudah dipindah ke adminRoutes
 import robloxRoutes from './routes/robloxRoutes';
+import robuxRoutes from './routes/robuxRoutes';   // <--- IMPORT INI (Untuk Validasi & Bot)
 
 dotenv.config();
 
@@ -21,6 +22,9 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+
+app.listen(3000, () => console.log('Server running on :3000'));
+
 // --- Routes Registration ---
 app.use('/api/users', userRoutes);
 app.use('/api/orders', orderRoutes);
@@ -28,6 +32,7 @@ app.use('/api/games', gameRoutes);
 app.use('/api/admin', adminRoutes);
 // app.use('/api/items', itemRoutes); // DIHAPUS
 app.use('/api/roblox', robloxRoutes);
+app.use('/api/robux', robuxRoutes); // <--- DAFTARKAN DI SINI
 
 app.get('/', (req: Request, res: Response) => {
   res.send('API El TopUp is Running...');
