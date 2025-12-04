@@ -4,32 +4,40 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+// Helper untuk delay
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-// CONFIG 1: UNTUK KE ROBLOX ASLI (Pakai Cookie - Khusus User Lookup)
 const getRobloxConfig = () => {
   const cookie = process.env.ROBLOX_COOKIE;
   if (!cookie) return {};
   return {
     headers: {
       'Cookie': `.ROBLOSECURITY=${cookie}`,
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    }
-  };
-};
-
-// CONFIG 2: UNTUK KE PROXY (TANPA COOKIE - Khusus Scanning)
-// Kita tidak boleh kirim cookie ke proxy demi keamanan!
-const getProxyConfig = () => {
-  return {
-    headers: {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       'Accept': 'application/json'
     }
   };
 };
 
-// --- FUNGSI 1: LOOKUP USER (Tetap pakai Roblox Asli) ---
+// Helper: Fetch dengan Retry Otomatis (Anti-429)
+const axiosGetWithRetry = async (url: string, config: any, retries = 3) => {
+    for (let i = 0; i < retries; i++) {
+        try {
+            return await axios.get(url, config);
+        } catch (error: any) {
+            const status = error.response?.status;
+            // Jika error 429 (Rate Limit) atau 503 (Server Busy) dan masih punya sisa nyawa
+            if ((status === 429 || status === 503) && i < retries - 1) {
+                console.log(`⚠️ Kena Rate Limit (${status}). Tunggu 2 detik... (Percobaan ${i + 1}/${retries})`);
+                await sleep(2000); // Tunggu 2 detik
+                continue; // Coba lagi
+            }
+            throw error; // Jika error lain (404/400) atau nyawa habis, lempar error
+        }
+    }
+};
+
+// --- FUNGSI 1: LOOKUP USER (Tetap) ---
 const userCache = new Map<string, any>();
 export const lookupUser = async (req: Request, res: Response) => {
   const { username } = req.body;
@@ -59,119 +67,103 @@ export const lookupUser = async (req: Request, res: Response) => {
   }
 };
 
-// --- FUNGSI 2: VALIDASI GAMEPASS (PROXY SCANNER STRATEGY) ---
+// --- FUNGSI 2: VALIDASI VIA LINK/ID (API MODERN + DEBUG LENGKAP) ---
 export const validateGamepass = async (req: Request, res: Response) => {
-  const { username, nominal } = req.body; 
+  const { username, nominal, gamepassLink } = req.body; 
 
-  if (!username || !nominal) {
-    return res.status(400).json({ message: 'Username dan Nominal wajib diisi.' });
+  if (!username || !nominal || !gamepassLink) {
+    return res.status(400).json({ message: 'Mohon isi Username, Nominal, dan Link/ID Gamepass.' });
+  }
+
+  // Ekstrak ID
+  let gamepassId = "";
+  const linkMatch = gamepassLink.toString().match(/game-pass\/(\d+)/);
+  if (linkMatch) {
+      gamepassId = linkMatch[1];
+  } else if (/^\d+$/.test(gamepassLink.toString())) {
+      gamepassId = gamepassLink.toString();
+  } else {
+      return res.status(400).json({ message: 'Format Link/ID Gamepass tidak valid.' });
   }
 
   const targetPrice = Math.round(Number(nominal) / 0.7);
 
+  console.log(`\n🔗 INPUT: ${gamepassLink}`);
+  console.log(`🆔 ID: ${gamepassId} | 🎯 TARGET: ${targetPrice} R$`);
+
   try {
-    // 1. DAPATKAN ID USER (Pakai Roblox Asli + Cookie)
+    // 1. CEK USER ID
     const userRes = await axios.post('https://users.roblox.com/v1/usernames/users', 
-        { usernames: [username], excludeBannedUsers: true },
-        getRobloxConfig()
-    );
+        { usernames: [username], excludeBannedUsers: true }, getRobloxConfig());
     
-    if (userRes.data.data.length === 0) return res.status(404).json({ message: 'User Roblox tidak ditemukan' });
-    
+    if (userRes.data.data.length === 0) return res.status(404).json({ message: 'Username Roblox tidak ditemukan' });
     const userId = userRes.data.data[0].id;
-    const { name } = userRes.data.data[0];
 
-    console.log(`\n🕵️  BOT SCANNING (PROXY): ${username} (ID: ${userId})`);
-    console.log(`🎯  Mencari Target: ${targetPrice} Robux`);
+    // 2. CEK GAMEPASS (API MODERN - apis.roblox.com)
+    // URL ini lebih stabil untuk Gamepass baru
+    const productUrl = `https://apis.roblox.com/game-passes/v1/game-passes/${gamepassId}/product-info`;
+    
+    const productRes = await axiosGetWithRetry(productUrl, getRobloxConfig());
+    const data = productRes?.data;
 
-    // 2. AMBIL DAFTAR GAME (Pakai RoProxy - Tanpa Cookie)
-    // URL: https://games.roproxy.com/v2/users/{userId}/games
-    let games = [];
-    try {
-        const gamesRes = await axios.get(
-            `https://games.roproxy.com/v2/users/${userId}/games?accessFilter=Public&limit=50&sortOrder=Asc`,
-            getProxyConfig()
-        );
-        games = gamesRes.data.data || [];
-        console.log(`   📂 Ditemukan ${games.length} game publik (via Proxy).`);
-    } catch (e: any) {
-        console.log(`   ❌ Gagal ambil game: ${e.message}`);
-        return res.status(500).json({ message: 'Gagal memindai game user (Proxy Error).' });
-    }
+    // DEBUG: Cetak respons asli di terminal agar kita tahu struktur datanya
+    console.log("📦 RAW ROBLOX DATA:", JSON.stringify(data, null, 2));
 
-    if (games.length === 0) {
-        return res.status(400).json({ message: 'User tidak memiliki Game Publik.' });
-    }
+    // Mapping Data (Mencoba berbagai kemungkinan format)
+    const gpName = data.name || data.Name;
+    const gpPrice = data.priceInRobux ?? data.PriceInRobux;
+    const gpIsForSale = data.isForSale ?? data.IsForSale;
+    
+    // Creator ID bisa bersarang atau langsung
+    const gpCreatorId = data.creatorId ?? data.Creator?.CreatorTargetId ?? data.creatorTargetId; 
+    const gpCreatorName = data.creatorName ?? data.Creator?.Name;
 
-    let foundGamepass = null;
+    console.log(`🔎 INFO: "${gpName}" | Harga: ${gpPrice} | CreatorID: ${gpCreatorId}`);
 
-    // 3. SCAN GAMEPASS (Pakai RoProxy - Tanpa Cookie)
-    for (const game of games) {
-        const universeId = game.id; 
-        process.stdout.write(`   👉 Cek Game "${game.name}"... `); 
-        
-        try {
-            // URL: https://games.roproxy.com/v1/games/{universeId}/game-passes
-            const passUrl = `https://games.roproxy.com/v1/games/${universeId}/game-passes?limit=100&sortOrder=Asc`;
-            
-            const passRes = await axios.get(passUrl, getProxyConfig());
-            const passes = passRes.data.data;
-
-            if (passes && passes.length > 0) {
-                const prices = passes.map((p: any) => p.price);
-                console.log(`Harga: [${prices.join(', ')}]`);
-
-                const match = passes.find((p: any) => p.price === targetPrice);
-                if (match) {
-                    foundGamepass = {
-                        id: match.id,
-                        name: match.name,
-                        price: match.price,
-                        imgUrl: `https://www.roblox.com/game-pass/${match.id}/`
-                    };
-                    break; // KETEMU! STOP LOOP.
-                }
-            } else {
-                console.log(`(Kosong)`);
-            }
-
-        } catch (err: any) {
-            console.log(`SKIP (${err.response?.status || err.message})`);
-        }
-        
-        await sleep(100); // Jeda sopan
-    }
-
-    // 4. HASIL AKHIR
-    if (foundGamepass) {
-        // @ts-ignore
-        console.log(`✅  SUKSES! DITEMUKAN: ${foundGamepass.name} (${foundGamepass.price} R$)`);
-        return res.json({
-            valid: true,
-            message: 'Gamepass valid. Lanjutkan ke Checkout.',
-            username: name,
-            userId: userId,
-            // @ts-ignore
-            gamepassId: foundGamepass.id,
-            // @ts-ignore
-            gamepassName: foundGamepass.name,
-            requiredPrice: targetPrice,
-            originalNominal: Number(nominal),
-            // @ts-ignore
-            imgUrl: foundGamepass.imgUrl
-        });
-    } else {
-        console.log(`❌  GAGAL TOTAL. Target: ${targetPrice}`);
+    // 3. VALIDASI PEMILIK
+    if (String(gpCreatorId) !== String(userId)) {
         return res.status(400).json({ 
             valid: false, 
-            message: `Gamepass seharga ${targetPrice} Robux tidak ditemukan otomatis. Pastikan harga benar.`,
-            requiredPrice: targetPrice,
-            manualCheckRequired: true // Opsi input manual tetap ada sebagai cadangan
+            message: `Gamepass ini milik user ID '${gpCreatorId}' (${gpCreatorName}), bukan milik '${username}' (ID: ${userId}).` 
+        });
+    }
+
+    // 4. VALIDASI HARGA
+    if (gpIsForSale && gpPrice === targetPrice) {
+        console.log("✅ VALIDASI SUKSES!");
+        return res.json({
+            valid: true,
+            message: 'Gamepass valid.',
+            username: username,
+            userId: userId,
+            gamepassId: Number(gamepassId),
+            gamepassName: gpName,
+            price: gpPrice,
+            imgUrl: `https://www.roblox.com/game-pass/${gamepassId}/`,
+            originalNominal: Number(nominal)
+        });
+    } else {
+        console.log(`❌ GAGAL: Harga/Status Salah.`);
+        return res.status(400).json({ 
+            valid: false, 
+            message: `Harga Gamepass salah. Terdaftar: ${gpPrice || 'Offsale'}. Wajib: ${targetPrice} Robux.`,
+            requiredPrice: targetPrice
         });
     }
 
   } catch (error: any) {
-    console.error('❌ SYSTEM ERROR:', error.message);
-    res.status(500).json({ message: 'Server Error saat scanning' });
+    console.error('❌ API ERROR:', error.message);
+    if(error.response?.data) {
+        console.error('❌ API RESPONSE:', JSON.stringify(error.response.data));
+    }
+    
+    if (error.response?.status === 404 || error.response?.status === 400) {
+        return res.status(404).json({ message: 'ID Gamepass tidak ditemukan. Pastikan link benar dan Gamepass publik.' });
+    }
+    if (error.response?.status === 429) {
+        return res.status(429).json({ message: 'Server Roblox sibuk (429). Mohon tunggu sebentar lalu coba lagi.' });
+    }
+    
+    res.status(500).json({ message: 'Server Error saat validasi.' });
   }
 };
