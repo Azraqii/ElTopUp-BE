@@ -86,7 +86,7 @@ export const validateGamepass = async (req: Request, res: Response) => {
       return res.status(400).json({ message: 'Format Link/ID Gamepass tidak valid.' });
   }
 
-  const targetPrice = Math.round(Number(nominal) / 0.7);
+  const targetPrice = Math.ceil(Number(nominal) / 0.7);
 
   console.log(`\n🔗 INPUT: ${gamepassLink}`);
   console.log(`🆔 ID: ${gamepassId} | 🎯 TARGET: ${targetPrice} R$`);
