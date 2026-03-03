@@ -1,52 +1,42 @@
-import jwt from 'jsonwebtoken';
 import { Request, Response, NextFunction } from 'express';
-import User from '../models/userModel';
+import { createRemoteJWKSet, jwtVerify } from 'jose';
 
 export interface AuthRequest extends Request {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   user?: any;
 }
 
-// 1. PROTECT (Cek Login)
-export const protect = async (req: AuthRequest, res: Response, next: NextFunction) => {
-  let token;
-  if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-    try {
-      token = req.headers.authorization.split(' ')[1];
-      const decoded: any = jwt.verify(token, process.env.JWT_SECRET as string);
-      req.user = await User.findById(decoded.id).select('-password');
-      
-      if (!req.user) {
-        return res.status(401).json({ message: 'User tidak ditemukan' });
-      }
-      next();
-    } catch (error) {
-      res.status(401).json({ message: 'Not authorized, token failed' });
-    }
-  } else {
-    res.status(401).json({ message: 'Not authorized, no token' });
-  }
-};
+// Supabase public JWKS endpoint — returns EC public keys for ES256 verification.
+// createRemoteJWKSet caches the keys and re-fetches when needed.
+const JWKS = createRemoteJWKSet(
+  new URL(
+    `https://${process.env.SUPABASE_PROJECT_REF}.supabase.co/auth/v1/.well-known/jwks.json`,
+  ),
+);
 
-// 2. OPTIONAL PROTECT (Guest/Member)
-export const optionalProtect = async (req: AuthRequest, res: Response, next: NextFunction) => {
-  let token;
-  if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-    try {
-      token = req.headers.authorization.split(' ')[1];
-      const decoded: any = jwt.verify(token, process.env.JWT_SECRET as string);
-      req.user = await User.findById(decoded.id).select('-password');
-    } catch (error) {
-      req.user = undefined;
-    }
-  }
-  next();
-};
+export const requireAuth = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+): Promise<void> => {
+  const authHeader = req.headers.authorization;
 
-// 3. ADMIN ONLY (Satpam Lapis 2) <--- INI YANG BARU
-export const admin = (req: AuthRequest, res: Response, next: NextFunction) => {
-  if (req.user && req.user.role === 'admin') {
-    next(); // Silakan lewat bos
-  } else {
-    res.status(403).json({ message: 'Akses Ditolak: Khusus Admin!' });
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    res.status(401).json({ error: 'Unauthorized: No token provided' });
+    return;
+  }
+
+  const token = authHeader.split(' ')[1];
+
+  try {
+    const { payload } = await jwtVerify(token, JWKS, {
+      issuer: `https://${process.env.SUPABASE_PROJECT_REF}.supabase.co/auth/v1`,
+      audience: 'authenticated',
+    });
+    // payload.sub = Supabase user UUID
+    req.user = payload;
+    next();
+  } catch (error) {
+    res.status(403).json({ error: 'Forbidden: Invalid or expired token' });
   }
 };

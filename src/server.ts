@@ -1,58 +1,36 @@
 import express, { type Request, type Response } from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
-import mongoose from 'mongoose';
 
-// Import Routes
-import userRoutes from './routes/userRoutes';
-import orderRoutes from './routes/orderRoutes';
-import gameRoutes from './routes/gameRoutes';
-import adminRoutes from './routes/adminRoutes';
-// itemRoutes DIHAPUS karena fungsinya sudah dipindah ke adminRoutes
-import robloxRoutes from './routes/robloxRoutes';
-import robuxRoutes from './routes/robuxRoutes';   // <--- IMPORT INI (Untuk Validasi & Bot)
-
+// Load env vars first
 dotenv.config();
 
+// Import Routes
+import authRoutes from './routes/authRoutes';
+import orderRoutes from './routes/orderRoutes';
+import webhookRoutes from './routes/webhookRoutes';
+
 const PORT: number = parseInt(process.env.PORT || '5001', 10);
-const MONGO_URI: string = process.env.MONGO_URI || '';
 
 const app = express();
 
+// ── Middleware ──────────────────────────────────────────────────────
 app.use(cors());
 app.use(express.json());
 
-
-app.listen(3000, () => console.log('Server running on :3000'));
-
-// --- Routes Registration ---
-app.use('/api/users', userRoutes);
-app.use('/api/orders', orderRoutes);
-app.use('/api/games', gameRoutes);
-app.use('/api/admin', adminRoutes);
-// app.use('/api/items', itemRoutes); // DIHAPUS
-app.use('/api/roblox', robloxRoutes);
-app.use('/api/robux', robuxRoutes); // <--- DAFTARKAN DI SINI
-
-app.get('/', (req: Request, res: Response) => {
-  res.send('API El TopUp is Running...');
+// ── Health check ────────────────────────────────────────────────────
+app.get('/', (_req: Request, res: Response) => {
+  res.json({ status: 'ok', service: 'El TopUp API' });
 });
 
-const connectDB = async () => {
-    if (!MONGO_URI) return;
-    try {
-        await mongoose.connect(MONGO_URI);
-        console.log('✅ MongoDB connected successfully!');
-    } catch (error) {
-        console.error('❌ MongoDB connection failed:', error);
-    }
-};
+// ── Routes ───────────────────────────────────────────────────────────
+app.use('/api/auth', authRoutes);
+app.use('/api/orders', orderRoutes);
+app.use('/api/webhooks', webhookRoutes);
 
-const startServer = async () => {
-    await connectDB();
-    app.listen(PORT, () => {
-      console.log(`⚡️ Server is running at http://localhost:${PORT}`);
-    });
-}
+// ── Start ────────────────────────────────────────────────────────────
+app.listen(PORT, () => {
+  console.log(`⚡️  El TopUp API running at http://localhost:${PORT}`);
+});
 
-startServer();
+export default app;

@@ -1,14 +1,16 @@
-import express from 'express';
-import { createOrder, simulatePayment } from '../controllers/orderController';
-import { protect, optionalProtect } from '../middleware/authMiddleware';
+import { Router } from 'express';
+import { requireAuth } from '../middleware/authMiddleware';
+import { checkout, getOrderStatus, getMyOrders } from '../controllers/orderController';
 
-const router = express.Router();
+const router = Router();
 
-// Create Order: Bisa Login (Member) atau Tanpa Login (Guest)
-// Menggunakan optionalProtect agar controller bisa membedakannya
-router.post('/', optionalProtect, createOrder);
+// POST /api/orders/checkout — Phase 1: Validate + create order + get payment URL
+router.post('/checkout', requireAuth, checkout);
 
-// Simulasi Bayar: Tetap butuh login (biar aman saat testing)
-router.post('/:id/pay', protect, simulatePayment);
+// GET /api/orders — Fetch authenticated user's orders
+router.get('/', requireAuth, getMyOrders);
+
+// GET /api/orders/:id/status — Phase 4: Poll latest status from RobuxShip
+router.get('/:id/status', requireAuth, getOrderStatus);
 
 export default router;

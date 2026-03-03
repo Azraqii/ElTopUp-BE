@@ -1,0 +1,84 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// 1. Data Pengguna (Disinkronkan dengan Supabase Auth)
+model User {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email     String   @unique
+  name      String?
+  role      String   @default("customer") 
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  orders    Order[]
+}
+
+// 2. Katalog Harga di El TopUp
+model CatalogItem {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name            String   // Contoh: "100 Robux"
+  robuxAmount     Int
+  priceIdr        Int
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  orders          Order[]
+}
+
+// 3. Tabel Transaksi Utama
+model Order {
+  id                     String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId                 String      @db.Uuid
+  catalogItemId          String      @db.Uuid
+  
+  robloxUsername         String      // Roblox username pembeli
+  robloxGamepassId       String?     // Diisi setelah validasi RobuxShip sukses
+  
+  paymentStatus          String      @default("UNPAID") // UNPAID, PAID, FAILED, REFUNDED
+  robuxshipStatus        String      @default("PENDING") // PENDING, PROCESSING, COMPLETED, ERROR
+  
+  midtransOrderId        String?     @unique
+  robuxshipOrderId       String?     @unique // Diisi setelah API Create Order sukses
+  
+  // Kalkulasi Keuangan (Opsional tapi direkomendasikan)
+  customerPriceIdr       Int
+  midtransFeeIdr         Int?
+  robuxshipCostUsd       Decimal?    @db.Decimal(10, 2)
+  
+  user                   User        @relation(fields: [userId], references: [id])
+  catalogItem            CatalogItem @relation(fields: [catalogItemId], references: [id])
+  eventLogs              SystemLog[]
+
+  createdAt              DateTime    @default(now())
+  updatedAt              DateTime    @updatedAt
+}
+
+// 4. Log Sistem (Untuk audit trail Webhook & API)
+model SystemLog {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orderId        String?  @db.Uuid
+  serviceName    String   // 'MIDTRANS', 'ROBUXSHIP', 'SYSTEM'
+  eventType      String
+  payloadData    Json
+  status         String
+  createdAt      DateTime @default(now())
+
+  order          Order?   @relation(fields: [orderId], references: [id])
+}
+
+// 5. Konfigurasi Sistem (Untuk mengatur kurs & margin dinamis)
+model SystemConfig {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  key               String   @unique
+  value             String
+  description       String? 
+  updatedAt         DateTime @updatedAt
+}

@@ -1,112 +1,184 @@
-import { Request, Response } from 'express';
-import { v4 as uuidv4 } from 'uuid';
-import Order from '../models/Order';
-import Item from '../models/Item';
-import { purchaseGamepass } from '../utils/robloxBot'; 
+import { Response } from 'express';
+import { AuthRequest } from '../middleware/authMiddleware';
+import { prisma } from '../lib/prisma';
+import { syncUserToDatabase } from '../utils/syncUser';
+import { validateGamepass } from '../services/robuxshipService';
+import { createSnapTransaction } from '../services/midtransService';
+import { syncRobuxshipStatus } from '../services/robuxshipService';
 
-interface AuthRequest extends Request {
-  user?: any;
-}
+// ------------------------------------------------------------------
+// POST /api/orders/checkout
+// ------------------------------------------------------------------
+// Phase 1: Validate gamepass → create order → return Midtrans payment URL
 
-// --- FUNGSI CREATE ORDER (Tetap) ---
-export const createOrder = async (req: AuthRequest, res: Response) => {
-  const { itemId, quantity, robloxUsername, gamepassId, note, email } = req.body;
-  const userId = req.user ? req.user._id : undefined;
-  const customerEmail = req.user ? req.user.email : email;
-
-  if (!customerEmail) return res.status(400).json({ message: 'Email wajib diisi.' });
-
+export const checkout = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const item = await Item.findById(itemId);
-    if (!item) return res.status(404).json({ message: 'Item tidak ditemukan' });
+    const supabaseUser = req.user;
 
-    if (item.type === 'robux' && !gamepassId) {
-      return res.status(400).json({ message: 'Gamepass ID wajib diisi.' });
+    // 1. Ensure the user exists in our DB (sync from Supabase)
+    const user = await syncUserToDatabase(supabaseUser);
+
+    const { catalogItemId, robloxUsername } = req.body as {
+      catalogItemId: string;
+      robloxUsername: string;
+    };
+
+    if (!catalogItemId || !robloxUsername) {
+      res.status(400).json({ error: 'catalogItemId and robloxUsername are required.' });
+      return;
     }
 
-    const qty = parseInt(quantity) || 1;
-    const grossAmount = item.price * qty;
-    const orderId = `TRX-${Date.now().toString().slice(-6)}-${uuidv4().split('-')[0].toUpperCase()}`;
-
-    const newOrder = await Order.create({
-      user: userId,
-      email: customerEmail,
-      robloxUsername,
-      item: item._id,
-      itemName: item.name,
-      itemType: item.type,
-      quantity: qty,
-      totalPrice: grossAmount,
-      gamepassId: item.type === 'robux' ? gamepassId : undefined,
-      note: item.type === 'item' ? note : undefined,
-      midtransOrderId: orderId, 
-      paymentStatus: 'UNPAID'
+    // 2. Fetch catalog item
+    const catalogItem = await prisma.catalogItem.findUnique({
+      where: { id: catalogItemId },
     });
 
-    res.status(201).json({ message: 'Order berhasil dibuat', order: newOrder });
-  } catch (error) {
-    res.status(500).json({ message: 'Gagal memproses order', error });
+    if (!catalogItem || !catalogItem.isActive) {
+      res.status(404).json({ error: 'Catalog item not found or inactive.' });
+      return;
+    }
+
+    // 3. Validate gamepass via RobuxShip
+    let gamepassData;
+    try {
+      gamepassData = await validateGamepass(robloxUsername, catalogItem.robuxAmount);
+    } catch (validationError) {
+      await prisma.systemLog.create({
+        data: {
+          serviceName: 'ROBUXSHIP',
+          eventType: 'VALIDATE_GAMEPASS_FAILED',
+          payloadData: { username: robloxUsername, error: (validationError as Error).message },
+          status: 'ERROR',
+        },
+      });
+      res.status(400).json({
+        error: 'Roblox gamepass validation failed.',
+        details: (validationError as Error).message,
+      });
+      return;
+    }
+
+    // 4. Create the Order record in DB (UNPAID)
+    const order = await prisma.order.create({
+      data: {
+        userId: user.id,
+        catalogItemId,
+        robloxUsername,
+        robloxGamepassId: gamepassData.gamepassId,
+        paymentStatus: 'UNPAID',
+        robuxshipStatus: 'PENDING',
+        customerPriceIdr: catalogItem.priceIdr,
+        robuxshipCostUsd: gamepassData.cost,
+      },
+    });
+
+    // 5. Create Midtrans Snap transaction
+    const snapResult = await createSnapTransaction({
+      midtransOrderId: order.id,
+      grossAmountIdr: catalogItem.priceIdr,
+      customerName: user.name || user.email,
+      customerEmail: user.email,
+      description: `${catalogItem.name} — El TopUp`,
+    });
+
+    // 6. Save the Midtrans order ID back to the Order record
+    await prisma.order.update({
+      where: { id: order.id },
+      data: { midtransOrderId: order.id },
+    });
+
+    await prisma.systemLog.create({
+      data: {
+        orderId: order.id,
+        serviceName: 'MIDTRANS',
+        eventType: 'SNAP_TRANSACTION_CREATED',
+        payloadData: { token: snapResult.token },
+        status: 'SUCCESS',
+      },
+    });
+
+    res.status(201).json({
+      orderId: order.id,
+      paymentToken: snapResult.token,
+      paymentUrl: snapResult.redirectUrl,
+    });
+  } catch (err) {
+    console.error('[checkout] Unexpected error:', err);
+    res.status(500).json({ error: 'Internal server error during checkout.' });
   }
 };
 
-export const getOrderById = async (req: Request, res: Response) => {
+// ------------------------------------------------------------------
+// GET /api/orders/:id/status
+// ------------------------------------------------------------------
+// Phase 4: Poll order status (syncs from RobuxShip)
+
+export const getOrderStatus = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const order = await Order.findById(req.params.id);
-    if (!order) return res.status(404).json({ message: 'Order tidak ditemukan' });
-    res.json(order);
-  } catch (error) {
-    res.status(500).json({ message: 'Gagal mengambil data order', error });
+    const { id } = req.params;
+    const supabaseUser = req.user;
+
+    const order = await prisma.order.findUnique({
+      where: { id },
+      include: { catalogItem: true },
+    });
+
+    if (!order) {
+      res.status(404).json({ error: 'Order not found.' });
+      return;
+    }
+
+    // Ensure the authenticated user owns this order
+    if (order.userId !== supabaseUser.sub) {
+      res.status(403).json({ error: 'Forbidden.' });
+      return;
+    }
+
+    // If order is PAID and RobuxShip order exists, sync latest status
+    let robuxshipResult = null;
+    if (order.paymentStatus === 'PAID' && order.robuxshipOrderId) {
+      try {
+        robuxshipResult = await syncRobuxshipStatus(id);
+      } catch {
+        // Non-fatal — just return current DB state
+      }
+    }
+
+    res.json({
+      orderId: order.id,
+      paymentStatus: order.paymentStatus,
+      robuxshipStatus: robuxshipResult?.status ?? order.robuxshipStatus,
+      catalogItem: {
+        name: order.catalogItem.name,
+        robuxAmount: order.catalogItem.robuxAmount,
+      },
+      robloxUsername: order.robloxUsername,
+      createdAt: order.createdAt,
+      updatedAt: order.updatedAt,
+    });
+  } catch (err) {
+    console.error('[getOrderStatus] Unexpected error:', err);
+    res.status(500).json({ error: 'Internal server error.' });
   }
 };
 
-// --- FUNGSI SIMULATE PAYMENT (LOGIC FIXED) ---
-export const simulatePayment = async (req: Request, res: Response) => {
+// ------------------------------------------------------------------
+// GET /api/orders  (user's own orders)
+// ------------------------------------------------------------------
+
+export const getMyOrders = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const order = await Order.findById(req.params.id);
+    const userId = req.user.sub as string;
 
-    if (!order) return res.status(404).json({ message: 'Order tidak ditemukan' });
-    if (order.paymentStatus === 'PAID') return res.status(400).json({ message: 'Order sudah dibayar.' });
-
-    // 1. Update Status Pembayaran
-    order.paymentStatus = 'PAID';
-    order.orderStatus = 'PROCESSING';
-    await order.save();
-
-    console.log(`\n💰 Order ${order.midtransOrderId} DIBAYAR. Memulai Bot...`);
-
-    // 2. TRIGGER BOT
-    if (order.itemType === 'robux' && order.gamepassId) {
-        
-        // Ambil nominal asli dari Database Item
-        const itemData = await Item.findById(order.item);
-        const nominalBeli = itemData?.nominal || 0; 
-        
-        if (nominalBeli > 0) {
-            // FIX: Gunakan Math.ceil agar pembulatan ke ATAS (Aman pajak)
-            // 1 / 0.7 = 1.42 -> Ceil jadi 2.
-            const targetPrice = Math.ceil(nominalBeli / 0.7); 
-            
-            console.log(`   🎯 Nominal: ${nominalBeli} -> Target Harga: ${targetPrice} R$`);
-
-            purchaseGamepass(order.gamepassId, targetPrice)
-                .then(async (result) => {
-                    if (result.success) {
-                        order.orderStatus = 'COMPLETED';
-                        await order.save();
-                        console.log(`✅ Order SELESAI (Bot Sukses).`);
-                    } else {
-                        console.log(`⚠️ Order Gagal Diproses Bot. Cek Log.`);
-                    }
-                });
-        }
-    }
-
-    res.json({ 
-        message: 'Pembayaran Berhasil. Bot sedang memproses di background.', 
-        order 
+    const orders = await prisma.order.findMany({
+      where: { userId },
+      include: { catalogItem: true },
+      orderBy: { createdAt: 'desc' },
     });
 
-  } catch (error) {
-    res.status(500).json({ message: 'Gagal update pembayaran', error });
+    res.json({ orders });
+  } catch (err) {
+    console.error('[getMyOrders] Unexpected error:', err);
+    res.status(500).json({ error: 'Internal server error.' });
   }
 };
