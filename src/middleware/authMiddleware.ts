@@ -1,54 +1,42 @@
-import jwt from 'jsonwebtoken';
 import { Request, Response, NextFunction } from 'express';
-import User from '../models/userModel';
+import { createRemoteJWKSet, jwtVerify } from 'jose';
 
 export interface AuthRequest extends Request {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   user?: any;
 }
 
-// 1. PROTECT (Wajib Login)
-export const protect = async (req: AuthRequest, res: Response, next: NextFunction) => {
-  let token;
-  if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-    try {
-      token = req.headers.authorization.split(' ')[1];
-      const decoded: any = jwt.verify(token, process.env.JWT_SECRET as string);
-      req.user = await User.findById(decoded.id).select('-password');
-      
-      if (!req.user) {
-        // Token valid, tapi user sudah dihapus dari DB
-        return res.status(401).json({ message: 'User tidak ditemukan (Token Kedaluwarsa/Reset)' });
-      }
-      next();
-    } catch (error) {
-      res.status(401).json({ message: 'Not authorized, token failed' });
-    }
-  } else {
-    res.status(401).json({ message: 'Not authorized, no token' });
+// Supabase public JWKS endpoint — returns EC public keys for ES256 verification.
+// createRemoteJWKSet caches the keys and re-fetches when needed.
+const JWKS = createRemoteJWKSet(
+  new URL(
+    `https://${process.env.SUPABASE_PROJECT_REF}.supabase.co/auth/v1/.well-known/jwks.json`,
+  ),
+);
+
+export const requireAuth = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+): Promise<void> => {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    res.status(401).json({ error: 'Unauthorized: No token provided' });
+    return;
   }
-};
 
-// 2. OPTIONAL PROTECT (Debug Version)
-export const optionalProtect = async (req: AuthRequest, res: Response, next: NextFunction) => {
-  let token;
+  const token = authHeader.split(' ')[1];
 
-  if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-    try {
-      token = req.headers.authorization.split(' ')[1];
-      const decoded: any = jwt.verify(token, process.env.JWT_SECRET as string);
-      req.user = await User.findById(decoded.id).select('-password');
-      
-      // DEBUG LOG: Cek apakah user ketemu?
-      if (!req.user) {
-          console.log("⚠️ Token valid tapi User tidak ada di DB (Efek Seeding)");
-      } else {
-          console.log("✅ User ditemukan:", req.user.email);
-      }
-
-    } catch (error) {
-      console.log("❌ Token Error:", error);
-      req.user = undefined;
-    }
+  try {
+    const { payload } = await jwtVerify(token, JWKS, {
+      issuer: `https://${process.env.SUPABASE_PROJECT_REF}.supabase.co/auth/v1`,
+      audience: 'authenticated',
+    });
+    // payload.sub = Supabase user UUID
+    req.user = payload;
+    next();
+  } catch (error) {
+    res.status(403).json({ error: 'Forbidden: Invalid or expired token' });
   }
-  next();
 };

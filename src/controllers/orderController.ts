@@ -1,102 +1,208 @@
-import { Request, Response } from 'express';
-import { v4 as uuidv4 } from 'uuid';
-import Order from '../models/Order';
-import Item from '../models/Item';
+import { Response } from 'express';
+import { AuthRequest } from '../middleware/authMiddleware';
+import { prisma } from '../lib/prisma';
+import { syncUserToDatabase } from '../utils/syncUser';
+import { validateGamepass, syncRobuxshipStatus, createRobuxshipOrder } from '../services/robuxshipService';
+import { createSnapTransaction } from '../services/midtransService';
 
-// Interface user dari middleware
-interface AuthRequest extends Request {
-  user?: any;
-}
 
-// @desc    Buat Order Baru (Support Guest & Member)
-// @route   POST /api/orders
-// @access  Public (via Optional Protect)
-export const createOrder = async (req: AuthRequest, res: Response) => {
-  // Ambil input 'email' dari body (khusus guest)
-  const { itemId, quantity, robloxUsername, gamepassId, note, email } = req.body;
+// Konfigurasi Rate Harga (Bisa dipindah ke .env atau SystemConfig nanti)
+const RATE_USD_PER_1K_ROBUX = 4.5;
+const RATE_IDR_PER_USD = 16970;
 
-  // LOGIKA HIBRIDA:
-  // 1. Cek ID User (Kalau login ada isinya, kalau guest undefined)
-  const userId = req.user ? req.user._id : undefined;
-  
-  // 2. Tentukan Email Pembeli
-  // Jika User Login -> Ambil dari akunnya
-  // Jika Guest -> Ambil dari input form
-  const customerEmail = req.user ? req.user.email : email;
-
-  // Validasi Email (Penting buat Guest)
-  if (!customerEmail) {
-    return res.status(400).json({ message: 'Email wajib diisi untuk bukti pesanan (Guest Mode).' });
-  }
-
+// ------------------------------------------------------------------
+// POST /api/orders/checkout
+// ------------------------------------------------------------------
+export const checkout = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    // 1. Validasi Barang
-    const item = await Item.findById(itemId);
-    if (!item) {
-      return res.status(404).json({ message: 'Item tidak ditemukan' });
+    const supabaseUser = req.user;
+    const user = await syncUserToDatabase(supabaseUser);
+
+    // 1. Terima input dinamis dari frontend
+    const { robloxUsername, robuxAmount } = req.body as {
+      robloxUsername: string;
+      robuxAmount: number;
+    };
+
+    if (!robloxUsername || !robuxAmount || robuxAmount < 10) {
+      res.status(400).json({ error: 'Username dan nominal Robux (minimal 10) wajib diisi.' });
+      return;
     }
 
-    // 2. Validasi Khusus Robux
-    if (item.type === 'robux' && !gamepassId) {
-      return res.status(400).json({ message: 'Gamepass ID wajib diisi untuk pembelian Robux.' });
+    // 2. Kalkulasi Harga Jual IDR secara Dinamis
+    const priceUsd = (robuxAmount / 1000) * RATE_USD_PER_1K_ROBUX;
+    const totalPriceIdr = Math.ceil(priceUsd * RATE_IDR_PER_USD);
+
+    // 3. Kalkulasi Pajak 30% Roblox untuk Gamepass (Pembulatan ke Atas)
+    const grossRobuxAmount = Math.ceil(robuxAmount / 0.7);
+
+    // 4. Validate gamepass via RobuxShip menggunakan harga Gross
+    let gamepassData;
+    try {
+      gamepassData = await validateGamepass(robloxUsername, grossRobuxAmount);
+    } catch (validationError: any) {
+      await prisma.systemLog.create({
+        data: {
+          serviceName: 'ROBUXSHIP',
+          eventType: 'VALIDATE_GAMEPASS_FAILED',
+          payloadData: { username: robloxUsername, requestedNett: robuxAmount, requiredGross: grossRobuxAmount, error: validationError.message },
+          status: 'ERROR',
+        },
+      });
+      res.status(400).json({
+        error: 'Validasi gamepass gagal. Pastikan gamepass sudah dibuat dan harganya sesuai.',
+        details: validationError.message,
+        requiredPrice: grossRobuxAmount // Beritahu frontend harga gamepass yang seharusnya
+      });
+      return;
     }
 
-    // 3. Hitung Total Harga
-    const qty = parseInt(quantity) || 1;
-    const grossAmount = item.price * qty;
-    
-    // 4. Buat Nomor Order Unik
-    const orderId = `TRX-${Date.now().toString().slice(-6)}-${uuidv4().split('-')[0].toUpperCase()}`;
+    // 5. Create Order record (Tanpa CatalogItem)
+    const order = await prisma.order.create({
+      data: {
+        userId: user.id,
+        robuxAmount: robuxAmount, // Simpan nominal asli inputan user
+        robloxUsername,
+        robloxGamepassId: gamepassData.gamepassId?.toString(),
+        paymentStatus: 'UNPAID',
+        robuxshipStatus: 'PENDING',
+        customerPriceIdr: totalPriceIdr, // Simpan harga IDR yang sudah dihitung
+        robuxshipCostUsd: gamepassData.cost, 
+      },
+    });
 
-    // 5. Simpan ke Database
-    const newOrder = await Order.create({
-      user: userId,         // Bisa null/undefined
-      email: customerEmail, // Wajib disimpan
-      robloxUsername,
-      item: item._id,
-      itemName: item.name,
-      itemType: item.type,
-      quantity: qty,
-      totalPrice: grossAmount,
-      gamepassId: item.type === 'robux' ? gamepassId : undefined,
-      note: item.type === 'item' ? note : undefined,
-      midtransOrderId: orderId, 
-      paymentStatus: 'UNPAID'
+    // 6. Create Midtrans Snap transaction
+    const snapResult = await createSnapTransaction({
+      midtransOrderId: order.id,
+      grossAmountIdr: totalPriceIdr,
+      customerName: user.name || user.email,
+      customerEmail: user.email,
+      description: `Top Up ${robuxAmount} Robux — El TopUp`,
+    });
+
+    // 7. Save Midtrans order ID
+    await prisma.order.update({
+      where: { id: order.id },
+      data: { midtransOrderId: order.id },
+    });
+
+    // Log success
+    await prisma.systemLog.create({
+      data: {
+        orderId: order.id,
+        serviceName: 'MIDTRANS',
+        eventType: 'SNAP_TRANSACTION_CREATED',
+        payloadData: { token: snapResult.token },
+        status: 'SUCCESS',
+      },
     });
 
     res.status(201).json({
-      message: 'Order berhasil dibuat',
-      order: newOrder
+      orderId: order.id,
+      paymentToken: snapResult.token,
+      paymentUrl: snapResult.redirectUrl,
+      grossRobuxRequired: grossRobuxAmount,
+      totalPriceIdr: totalPriceIdr
     });
-
-  } catch (error) {
-    console.error('Create Order Error:', error);
-    res.status(500).json({ message: 'Gagal memproses order', error });
+  } catch (err) {
+    console.error('[checkout] Unexpected error:', err);
+    res.status(500).json({ error: 'Terjadi kesalahan internal server saat checkout.' });
   }
 };
 
-// @desc    Simulasi Bayar (Testing Only)
-// @route   POST /api/orders/:id/pay
-// @access  Private (Harus Login / Admin)
-export const simulatePayment = async (req: Request, res: Response) => {
+// ------------------------------------------------------------------
+// GET /api/orders/:id/status
+// ------------------------------------------------------------------
+export const getOrderStatus = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const order = await Order.findById(req.params.id);
+    const { id } = req.params;
+    const supabaseUser = req.user;
+
+    const order = await prisma.order.findUnique({
+      where: { id },
+    });
 
     if (!order) {
-      return res.status(404).json({ message: 'Order tidak ditemukan' });
+      res.status(404).json({ error: 'Order not found.' });
+      return;
     }
 
-    if (order.paymentStatus === 'PAID') {
-      return res.status(400).json({ message: 'Order ini sudah dibayar sebelumnya' });
+    if (order.userId !== supabaseUser.sub) {
+      res.status(403).json({ error: 'Forbidden.' });
+      return;
     }
 
-    // Update status jadi PAID
-    order.paymentStatus = 'PAID';
-    order.orderStatus = 'PROCESSING'; // Siap diproses Bot/Admin
-    await order.save();
+    let robuxshipResult = null;
+    if (order.paymentStatus === 'PAID' && order.robuxshipOrderId) {
+      try {
+        robuxshipResult = await syncRobuxshipStatus(id);
+      } catch (err) {
+        console.warn(`[getOrderStatus] Gagal sync manual dari Robuxship untuk order ${id}`);
+      }
+    }
 
-    res.json({ message: 'Pembayaran Berhasil (Simulasi)', order });
-  } catch (error) {
-    res.status(500).json({ message: 'Gagal update pembayaran', error });
+    res.json({
+      orderId: order.id,
+      paymentStatus: order.paymentStatus,
+      robuxshipStatus: robuxshipResult?.status ?? order.robuxshipStatus,
+      robuxAmount: order.robuxAmount, // Langsung ambil dari tabel Order
+      customerPriceIdr: order.customerPriceIdr,
+      robloxUsername: order.robloxUsername,
+      createdAt: order.createdAt,
+      updatedAt: order.updatedAt,
+    });
+  } catch (err) {
+    console.error('[getOrderStatus] Unexpected error:', err);
+    res.status(500).json({ error: 'Internal server error.' });
+  }
+};
+
+// ------------------------------------------------------------------
+// GET /api/orders  (user's own orders)
+// ------------------------------------------------------------------
+export const getMyOrders = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const userId = req.user.sub as string;
+
+    const orders = await prisma.order.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    res.json({ orders });
+  } catch (err) {
+    console.error('[getMyOrders] Unexpected error:', err);
+    res.status(500).json({ error: 'Internal server error.' });
+  }
+};
+
+
+// ------------------------------------------------------------------
+// POST /api/orders/:id/mock-pay (HANYA UNTUK TESTING)
+// ------------------------------------------------------------------
+export const mockPayOrder = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+
+    // 1. Ubah status di database menjadi PAID
+    const order = await prisma.order.update({
+      where: { id },
+      data: { paymentStatus: 'PAID' },
+    });
+
+    // 2. Eksekusi fungsi RobuxShip untuk memproses pesanan (Ini yang paling penting!)
+    await createRobuxshipOrder(id);
+
+    res.status(200).json({
+      success: true,
+      message: 'Pembayaran simulasi berhasil! RobuxShip sedang memproses pesanan.',
+      order
+    });
+  } catch (err: any) {
+    console.error('[mockPayOrder] Error:', err.message);
+    res.status(500).json({ 
+      error: 'Gagal melakukan simulasi pembayaran atau gagal menembak RobuxShip.',
+      details: err.message
+    });
   }
 };
