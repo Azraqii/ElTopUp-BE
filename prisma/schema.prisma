@@ -30,35 +30,40 @@ model CatalogItem {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  orders          Order[]
+  // 3. HAPUS ATAU JADIKAN KOMENTAR BARIS INI JUGA:
+  // orders          Order[]
 }
 
 // 3. Tabel Transaksi Utama
 model Order {
-  id                     String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId                 String      @db.Uuid
-  catalogItemId          String      @db.Uuid
+  id                 String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId             String      @db.Uuid
   
-  robloxUsername         String      // Roblox username pembeli
-  robloxGamepassId       String?     // Diisi setelah validasi RobuxShip sukses
-  
-  paymentStatus          String      @default("UNPAID") // UNPAID, PAID, FAILED, REFUNDED
-  robuxshipStatus        String      @default("PENDING") // PENDING, PROCESSING, COMPLETED, ERROR
-  
-  midtransOrderId        String?     @unique
-  robuxshipOrderId       String?     @unique // Diisi setelah API Create Order sukses
-  
-  // Kalkulasi Keuangan (Opsional tapi direkomendasikan)
-  customerPriceIdr       Int
-  midtransFeeIdr         Int?
-  robuxshipCostUsd       Decimal?    @db.Decimal(10, 2)
-  
-  user                   User        @relation(fields: [userId], references: [id])
-  catalogItem            CatalogItem @relation(fields: [catalogItemId], references: [id])
-  eventLogs              SystemLog[]
+  // 1. HAPUS ATAU JADIKAN KOMENTAR BARIS INI:
+  // catalogItemId      String      @db.Uuid 
+  // catalogItem        CatalogItem @relation(fields: [catalogItemId], references: [id])
 
-  createdAt              DateTime    @default(now())
-  updatedAt              DateTime    @updatedAt
+  // 2. TAMBAHKAN BARIS INI UNTUK MENYIMPAN INPUT USER:
+  robuxAmount        Int         // Nominal bersih yang diketik user
+  
+  robloxUsername     String      
+  robloxGamepassId   String?     
+  
+  paymentStatus      String      @default("UNPAID") 
+  robuxshipStatus    String      @default("PENDING") 
+  
+  midtransOrderId    String?     @unique
+  robuxshipOrderId   String?     @unique 
+  
+  customerPriceIdr   Int
+  midtransFeeIdr     Int?
+  robuxshipCostUsd   Decimal?    @db.Decimal(10, 2)
+  
+  user               User        @relation(fields: [userId], references: [id])
+  eventLogs          SystemLog[]
+
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
 }
 
 // 4. Log Sistem (Untuk audit trail Webhook & API)

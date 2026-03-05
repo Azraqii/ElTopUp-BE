@@ -3,7 +3,6 @@ import { prisma } from '../lib/prisma';
 
 const ROBUXSHIP_BASE_URL = 'https://api.robuxship.com/v1';
 const ROBUXSHIP_API_KEY = process.env.ROBUXSHIP_API_KEY as string;
-const ROBUXSHIP_SHOP_ID = process.env.ROBUXSHIP_SHOP_ID as string;
 
 const robuxshipClient = axios.create({
   baseURL: ROBUXSHIP_BASE_URL,
@@ -23,13 +22,8 @@ export interface ValidateGamepassResult {
   gamepassId: string;
   userId: number;
   username: string;
-  price: number;   // Robux price of the gamepass (already includes 30% tax)
-  cost: number;    // USD cost of this validation call
-}
-
-export interface RobuxshipOrderResult {
-  orderId: string;
-  status: string;
+  price: number;   
+  cost: number;    
 }
 
 export interface RobuxshipStatusResult {
@@ -43,40 +37,41 @@ export interface RobuxshipStatusResult {
 // ------------------------------------------------------------------
 
 /**
- * Calls GET /orders/validate?username=...&robux_amount=...
+ * Calls POST /orders/validate
  * Returns the validated gamepass details or throws an error.
  */
 export async function validateGamepass(
   username: string,
-  robuxAmount: number,
+  grossAmount: number,
 ): Promise<ValidateGamepassResult> {
   try {
-    const response = await robuxshipClient.get('/orders/validate', {
-      params: { username, robux_amount: robuxAmount },
+    // Sesuai dokumen: POST /orders/validate dengan JSON Body [cite: 215, 216, 218]
+    const response = await robuxshipClient.post('/orders/validate', {
+      method: 'gamepass', 
+      amount: grossAmount, 
+      username: username 
     });
 
     const data = response.data;
 
-    if (!data.success || !data.valid) {
-      throw new Error(data.message || 'Gamepass validation failed.');
+    // Sesuai dokumen: response berada langsung di root object [cite: 228-237]
+    if (!data.success || !data.valid) { 
+      throw new Error('Gamepass validation failed.');
     }
 
     return {
-      universeId: data.universe_id,
+      universeId: data.universe_id, 
       placeId: data.place_id,
-      gamepassId: String(data.gamepass_id),
-      userId: data.user_id,
-      username: data.username,
-      price: data.price,
-      cost: data.cost,
+      gamepassId: String(data.gamepass_id), 
+      userId: data.user_id, 
+      username: data.username, 
+      price: data.price, 
+      cost: data.cost, 
     };
-  } catch (err) {
-    const error = err as AxiosError<{ success: boolean; error: string; message: string }>;
-    if (error.response) {
-      const body = error.response.data;
-      throw new Error(body?.message || `RobuxShip validation error: ${error.response.status}`);
-    }
-    throw err;
+  } catch (err: any) {
+    // Standar error handling RobuxShip: err.response.data.error.message [cite: 106-114]
+    const errorMessage = err.response?.data?.error?.message || err.message || 'Gagal terhubung ke RobuxShip';
+    throw new Error(errorMessage);
   }
 }
 
@@ -85,37 +80,44 @@ export async function validateGamepass(
 // ------------------------------------------------------------------
 
 /**
- * Posts to POST /orders to create the actual Robux delivery order.
- * Should be called immediately after payment is confirmed.
+ * Posts to POST /orders/create to create the actual Robux delivery order.
+ * Should be called immediately after Midtrans payment is confirmed.
  */
 export async function createRobuxshipOrder(orderId: string): Promise<void> {
-  // Fetch the full order so we have gamepass_id and robux amount
+  // Ambil order dinamis kita, tanpa require catalogItem
   const order = await prisma.order.findUniqueOrThrow({
     where: { id: orderId },
-    include: { catalogItem: true },
   });
 
   if (!order.robloxGamepassId) {
     throw new Error(`Order ${orderId} has no gamepassId. Cannot create RobuxShip order.`);
   }
 
-  let apiResponseData: unknown = null;
+  let apiResponseData: any = null;
 
   try {
+    // Hitung ulang harga kotor untuk dikirim ke RobuxShip
+    const grossAmount = Math.ceil(order.robuxAmount / 0.7);
+
+    // Sesuai dokumen: Payload membutuhkan order_id (idempotency key dari sistem kita) [cite: 138, 144-148]
     const payload = {
-      shop_id: ROBUXSHIP_SHOP_ID,
-      method: 'Gamepass',
-      robux_amount: order.catalogItem.robuxAmount,
-      gamepass_id: order.robloxGamepassId,
+      order_id: order.id, 
+      method: 'gamepass', 
+      amount: grossAmount, 
+      gamepass_id: parseInt(order.robloxGamepassId, 10), 
     };
 
-    const response = await robuxshipClient.post('/orders', payload);
+    const response = await robuxshipClient.post('/orders/create', payload);
     apiResponseData = response.data;
 
-    const robuxshipOrderId = String(response.data?.order_id || response.data?.id);
-    const robuxshipStatus = response.data?.status || 'PROCESSING';
+    if (!apiResponseData.success) { 
+      throw new Error('Failed to create order on RobuxShip');
+    }
 
-    // Update the order with RobuxShip order details
+    // Ambil ID internal dari RobuxShip dan status [cite: 156, 158]
+    const robuxshipOrderId = String(apiResponseData.data.id); 
+    const robuxshipStatus = String(apiResponseData.data.status).toUpperCase(); 
+
     await prisma.order.update({
       where: { id: orderId },
       data: {
@@ -124,37 +126,31 @@ export async function createRobuxshipOrder(orderId: string): Promise<void> {
       },
     });
 
-    // Log success
     await prisma.systemLog.create({
       data: {
         orderId,
         serviceName: 'ROBUXSHIP',
         eventType: 'CREATE_ORDER_SUCCESS',
-        payloadData: response.data as object,
+        payloadData: apiResponseData,
         status: 'SUCCESS',
       },
     });
-  } catch (err) {
-    const error = err as AxiosError;
-
-    // Log the failure — the order is PAID so we MUST not lose it
+  } catch (err: any) {
     await prisma.systemLog.create({
       data: {
         orderId,
         serviceName: 'ROBUXSHIP',
         eventType: 'CREATE_ORDER_FAILED',
-        payloadData: (apiResponseData ?? { message: (error as Error).message }) as object,
+        payloadData: err.response?.data || { message: err.message },
         status: 'ERROR',
       },
     });
 
-    // Mark order as needing manual retry (keep paymentStatus PAID, set robuxshipStatus ERROR)
     await prisma.order.update({
       where: { id: orderId },
       data: { robuxshipStatus: 'ERROR' },
     });
 
-    // Re-throw so the caller is aware
     throw err;
   }
 }
@@ -171,24 +167,29 @@ export async function syncRobuxshipStatus(orderId: string): Promise<RobuxshipSta
     where: { id: orderId },
   });
 
-  if (!order.robuxshipOrderId) {
+  // RobuxShip mendukung pencarian menggunakan ID eksternal Anda [cite: 168, 172]
+  const queryId = order.robuxshipOrderId || order.id;
+
+  try {
+    const response = await robuxshipClient.get(`/orders/${queryId}`); 
+    const data = response.data.data; 
+
+    const remoteStatus: string = String(data.status).toUpperCase(); 
+
+    if (remoteStatus !== order.robuxshipStatus) {
+      await prisma.order.update({
+        where: { id: orderId },
+        data: { robuxshipStatus: remoteStatus },
+      });
+    }
+
+    return {
+      orderId: data.id, 
+      status: remoteStatus, 
+      robuxAmount: data.amount,
+    };
+  } catch (err: any) {
+    console.warn(`[syncRobuxshipStatus] Failed to sync order ${orderId}`);
     return { orderId, status: order.robuxshipStatus };
   }
-
-  const response = await robuxshipClient.get(`/orders/${order.robuxshipOrderId}`);
-  const remoteStatus: string = String(response.data?.status || 'PENDING').toUpperCase();
-
-  // Only write if the status changed to avoid unnecessary DB writes
-  if (remoteStatus !== order.robuxshipStatus) {
-    await prisma.order.update({
-      where: { id: orderId },
-      data: { robuxshipStatus: remoteStatus },
-    });
-  }
-
-  return {
-    orderId: order.robuxshipOrderId,
-    status: remoteStatus,
-    robuxAmount: response.data?.robux_amount,
-  };
 }
