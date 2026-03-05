@@ -2,8 +2,9 @@ import { Response } from 'express';
 import { AuthRequest } from '../middleware/authMiddleware';
 import { prisma } from '../lib/prisma';
 import { syncUserToDatabase } from '../utils/syncUser';
-import { validateGamepass, syncRobuxshipStatus } from '../services/robuxshipService';
+import { validateGamepass, syncRobuxshipStatus, createRobuxshipOrder } from '../services/robuxshipService';
 import { createSnapTransaction } from '../services/midtransService';
+
 
 // Konfigurasi Rate Harga (Bisa dipindah ke .env atau SystemConfig nanti)
 const RATE_USD_PER_1K_ROBUX = 4.5;
@@ -172,5 +173,36 @@ export const getMyOrders = async (req: AuthRequest, res: Response): Promise<void
   } catch (err) {
     console.error('[getMyOrders] Unexpected error:', err);
     res.status(500).json({ error: 'Internal server error.' });
+  }
+};
+
+
+// ------------------------------------------------------------------
+// POST /api/orders/:id/mock-pay (HANYA UNTUK TESTING)
+// ------------------------------------------------------------------
+export const mockPayOrder = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+
+    // 1. Ubah status di database menjadi PAID
+    const order = await prisma.order.update({
+      where: { id },
+      data: { paymentStatus: 'PAID' },
+    });
+
+    // 2. Eksekusi fungsi RobuxShip untuk memproses pesanan (Ini yang paling penting!)
+    await createRobuxshipOrder(id);
+
+    res.status(200).json({
+      success: true,
+      message: 'Pembayaran simulasi berhasil! RobuxShip sedang memproses pesanan.',
+      order
+    });
+  } catch (err: any) {
+    console.error('[mockPayOrder] Error:', err.message);
+    res.status(500).json({ 
+      error: 'Gagal melakukan simulasi pembayaran atau gagal menembak RobuxShip.',
+      details: err.message
+    });
   }
 };
