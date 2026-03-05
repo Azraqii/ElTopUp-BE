@@ -8,7 +8,7 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
-// 1. Data Pengguna (Disinkronkan dengan Supabase Auth)
+// 1. Data Pengguna
 model User {
   id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   email     String   @unique
@@ -18,72 +18,108 @@ model User {
   updatedAt DateTime @updatedAt
   
   orders    Order[]
+  reviews   Review[] 
 }
 
-// 2. Katalog Harga di El TopUp
-model CatalogItem {
-  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name            String   // Contoh: "100 Robux"
-  robuxAmount     Int
-  priceIdr        Int
-  isActive        Boolean  @default(true)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+// 2. Tabel Katalog Game
+model Game {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String    @unique 
+  slug      String    @unique 
+  imageUrl  String?
+  isActive  Boolean   @default(true)
+  
+  products  Product[] 
 
-  // 3. HAPUS ATAU JADIKAN KOMENTAR BARIS INI JUGA:
-  // orders          Order[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 }
 
-// 3. Tabel Transaksi Utama
+// 3. Product (Item jualan: Robux, Pedang, Ikan, dll)
+model Product {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  gameId      String?  @db.Uuid 
+  
+  name        String   
+  productType String   // "CURRENCY", "GAME_ITEM", "ACCOUNT"
+  priceIdr    Int      
+  isActive    Boolean  @default(true)
+  
+  imageUrl    String?
+  description String?
+
+  game        Game?    @relation(fields: [gameId], references: [id])
+  orders      Order[]
+  reviews     Review[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// 4. Tabel Transaksi Utama
 model Order {
-  id                 String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId             String      @db.Uuid
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId           String   @db.Uuid
+  productId        String?  @db.Uuid 
   
-  // 1. HAPUS ATAU JADIKAN KOMENTAR BARIS INI:
-  // catalogItemId      String      @db.Uuid 
-  // catalogItem        CatalogItem @relation(fields: [catalogItemId], references: [id])
+  robloxUsername   String      
+  customerPriceIdr Int
+  
+  robuxAmount      Int?     
+  robloxGamepassId String?     
+  
+  paymentStatus    String   @default("UNPAID") 
+  robuxshipStatus  String   @default("PENDING") 
+  
+  midtransOrderId  String?  @unique
+  robuxshipOrderId String?  @unique 
+  midtransFeeIdr   Int?
+  robuxshipCostUsd Decimal? @db.Decimal(10, 2)
+  
+  user             User        @relation(fields: [userId], references: [id])
+  product          Product?    @relation(fields: [productId], references: [id])
+  eventLogs        SystemLog[]
+  review           Review?     
 
-  // 2. TAMBAHKAN BARIS INI UNTUK MENYIMPAN INPUT USER:
-  robuxAmount        Int         // Nominal bersih yang diketik user
-  
-  robloxUsername     String      
-  robloxGamepassId   String?     
-  
-  paymentStatus      String      @default("UNPAID") 
-  robuxshipStatus    String      @default("PENDING") 
-  
-  midtransOrderId    String?     @unique
-  robuxshipOrderId   String?     @unique 
-  
-  customerPriceIdr   Int
-  midtransFeeIdr     Int?
-  robuxshipCostUsd   Decimal?    @db.Decimal(10, 2)
-  
-  user               User        @relation(fields: [userId], references: [id])
-  eventLogs          SystemLog[]
-
-  createdAt          DateTime    @default(now())
-  updatedAt          DateTime    @updatedAt
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 }
 
-// 4. Log Sistem (Untuk audit trail Webhook & API)
+// 5. Tabel Ulasan 
+model Review {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @db.Uuid
+  orderId   String   @unique @db.Uuid 
+  productId String?  @db.Uuid
+  
+  rating    Int      
+  comment   String?
+  
+  user      User     @relation(fields: [userId], references: [id])
+  order     Order    @relation(fields: [orderId], references: [id])
+  product   Product? @relation(fields: [productId], references: [id])
+
+  createdAt DateTime @default(now())
+}
+
+// 6. Log Sistem (INI YANG TADI HILANG)
 model SystemLog {
-  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  orderId        String?  @db.Uuid
-  serviceName    String   // 'MIDTRANS', 'ROBUXSHIP', 'SYSTEM'
-  eventType      String
-  payloadData    Json
-  status         String
-  createdAt      DateTime @default(now())
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orderId     String?  @db.Uuid
+  serviceName String   
+  eventType   String
+  payloadData Json
+  status      String
+  createdAt   DateTime @default(now())
 
-  order          Order?   @relation(fields: [orderId], references: [id])
+  order       Order?   @relation(fields: [orderId], references: [id])
 }
 
-// 5. Konfigurasi Sistem (Untuk mengatur kurs & margin dinamis)
+// 7. Konfigurasi Sistem (INI JUGA TADI HILANG)
 model SystemConfig {
-  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  key               String   @unique
-  value             String
-  description       String? 
-  updatedAt         DateTime @updatedAt
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  key         String   @unique
+  value       String
+  description String? 
+  updatedAt   DateTime @updatedAt
 }
