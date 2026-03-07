@@ -89,10 +89,9 @@ export async function createRobuxshipOrder(orderId: string): Promise<void> {
     where: { id: orderId },
   });
 
-  if (!order.robloxGamepassId) {
-    throw new Error(`Order ${orderId} has no gamepassId. Cannot create RobuxShip order.`);
+  if (!order.robloxGamepassId || order.robuxAmount === null) {
+    throw new Error(`Order ${orderId} is missing gamepassId or robuxAmount. Cannot create RobuxShip order.`);
   }
-
   let apiResponseData: any = null;
 
   try {
