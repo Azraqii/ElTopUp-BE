@@ -4,9 +4,9 @@
   "description": "Back End service for El TopUp website",
   "main": "index.js",
   "scripts": {
-    "start": "ts-node src/server.ts",
+    "start": "node dist/server.js",
     "dev": "cross-env TS_NODE_FILES=true nodemon --ext ts --exec ts-node -T src/server.ts",
-    "build": "tsc"
+    "build": "npx prisma generate && tsc"
   },
   "keywords": [],
   "author": "",
