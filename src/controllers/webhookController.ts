@@ -24,16 +24,28 @@ export const midtransWebhook = async (req: Request, res: Response): Promise<void
       return;
     }
 
-    const orderId = payload.order_id;
+    const externalOrderId = String(payload.order_id || '');
     const transactionStatus = payload.transaction_status;
     const fraudStatus = payload.fraud_status;
 
+    if (!externalOrderId) {
+      res.status(400).json({ error: 'Invalid order_id from Midtrans payload' });
+      return;
+    }
+
     // 2. Ambil data order dari database
-    const order = await prisma.order.findUnique({ where: { id: orderId } });
+    const order = await prisma.order.findFirst({
+      where: {
+        OR: [{ midtransOrderId: externalOrderId }, { id: externalOrderId }],
+      },
+    });
+
     if (!order) {
       res.status(404).json({ error: 'Order not found' });
       return;
     }
+
+    const orderId = order.id;
 
     // 3. Proses berdasarkan status pembayaran
     if (transactionStatus === 'capture' || transactionStatus === 'settlement') {
@@ -59,9 +71,16 @@ export const midtransWebhook = async (req: Request, res: Response): Promise<void
         }
       }
     } else if (transactionStatus === 'cancel' || transactionStatus === 'deny' || transactionStatus === 'expire') {
+      const failedStatus =
+        transactionStatus === 'cancel'
+          ? 'CANCELLED'
+          : transactionStatus === 'expire'
+          ? 'EXPIRED'
+          : 'FAILED';
+
       await prisma.order.update({
         where: { id: orderId },
-        data: { paymentStatus: 'FAILED' },
+        data: { paymentStatus: failedStatus },
       });
     }
 

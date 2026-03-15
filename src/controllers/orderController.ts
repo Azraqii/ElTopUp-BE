@@ -94,7 +94,65 @@ export const checkout = async (req: AuthRequest, res: Response): Promise<void> =
       },
     });
 
-    // 7. Return order details ke frontend
+    // 7. Buat transaksi pembayaran Midtrans (QRIS)
+    const frontendBaseUrl = (process.env.FRONTEND_URL || 'https://eltopup.id').replace(/\/$/, '');
+    const midtransOrderId = order.id;
+
+    let snapTransaction: { token: string; redirectUrl: string };
+    try {
+      snapTransaction = await createSnapTransaction({
+        midtransOrderId,
+        grossAmountIdr: totalPriceIdr,
+        customerName: user.name || user.email || 'El Top Up Customer',
+        customerEmail: user.email || `${user.id}@eltopup.id`,
+        description: `Top Up ${robuxAmount} Robux @${robloxUsername}`,
+        enabledPayments: ['qris'],
+        callbacks: {
+          finish: `${frontendBaseUrl}/pesanan/${order.id}`,
+          pending: `${frontendBaseUrl}/pesanan/${order.id}`,
+          error: `${frontendBaseUrl}/checkout/robux`,
+        },
+      });
+
+      await prisma.order.update({
+        where: { id: order.id },
+        data: { midtransOrderId },
+      });
+
+      await prisma.systemLog.create({
+        data: {
+          orderId: order.id,
+          serviceName: 'MIDTRANS',
+          eventType: 'CREATE_SNAP_SUCCESS',
+          payloadData: {
+            midtransOrderId,
+            redirectUrl: snapTransaction.redirectUrl,
+          },
+          status: 'SUCCESS',
+        },
+      });
+    } catch (midtransError: any) {
+      await prisma.systemLog.create({
+        data: {
+          orderId: order.id,
+          serviceName: 'MIDTRANS',
+          eventType: 'CREATE_SNAP_FAILED',
+          payloadData: {
+            message: midtransError.message,
+          },
+          status: 'ERROR',
+        },
+      });
+
+      res.status(502).json({
+        error: 'Order berhasil dibuat, tetapi gagal membuat transaksi pembayaran Midtrans.',
+        details: midtransError.message,
+        orderId: order.id,
+      });
+      return;
+    }
+
+    // 8. Return order details ke frontend
     res.status(201).json({
       success: true,
       orderId: order.id,
@@ -102,6 +160,13 @@ export const checkout = async (req: AuthRequest, res: Response): Promise<void> =
       grossRobuxAmount: grossRobuxAmount,
       totalPriceIdr: totalPriceIdr,
       gamepassId: gamepassData.gamepassId,
+      payment: {
+        provider: 'MIDTRANS',
+        method: 'qris',
+        midtransOrderId,
+        snapToken: snapTransaction.token,
+        snapRedirectUrl: snapTransaction.redirectUrl,
+      },
       message: 'Order berhasil dibuat. Silakan lanjutkan ke pembayaran.'
     });
   } catch (err) {
