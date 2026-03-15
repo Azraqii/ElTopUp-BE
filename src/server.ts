@@ -32,9 +32,11 @@ app.use('/api/auth', authRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/webhooks', webhookRoutes);
 
-// ── Start ────────────────────────────────────────────────────────────
-app.listen(PORT, () => {
-  console.log(`⚡️  El TopUp API running at http://localhost:${PORT}`);
-});
+// ── Start (only when running locally, not on Vercel) ─────────────────
+if (process.env.VERCEL !== '1') {
+  app.listen(PORT, () => {
+    console.log(`⚡️  El TopUp API running at http://localhost:${PORT}`);
+  });
+}
 
 export default app;
