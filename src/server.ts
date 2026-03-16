@@ -21,20 +21,31 @@ app.get('/', (_req: Request, res: Response) => {
   res.json({ status: 'ok', service: 'El TopUp API' });
 });
 
-// Lazy import routes — hanya diload saat request masuk
 app.use('/api/auth', async (req, res, next) => {
-  const { default: authRoutes } = await import('./routes/authRoutes');
-  authRoutes(req, res, next);
+  try {
+    const { default: authRoutes } = await import('./routes/authRoutes');
+    authRoutes(req, res, next);
+  } catch (err: any) {
+    res.status(500).json({ error: 'AUTH_ROUTE_CRASH', message: err.message, stack: err.stack });
+  }
 });
 
 app.use('/api/orders', async (req, res, next) => {
-  const { default: orderRoutes } = await import('./routes/orderRoutes');
-  orderRoutes(req, res, next);
+  try {
+    const { default: orderRoutes } = await import('./routes/orderRoutes');
+    orderRoutes(req, res, next);
+  } catch (err: any) {
+    res.status(500).json({ error: 'ORDER_ROUTE_CRASH', message: err.message, stack: err.stack });
+  }
 });
 
 app.use('/api/webhooks', async (req, res, next) => {
-  const { default: webhookRoutes } = await import('./routes/webhookRoutes');
-  webhookRoutes(req, res, next);
+  try {
+    const { default: webhookRoutes } = await import('./routes/webhookRoutes');
+    webhookRoutes(req, res, next);
+  } catch (err: any) {
+    res.status(500).json({ error: 'WEBHOOK_ROUTE_CRASH', message: err.message, stack: err.stack });
+  }
 });
 
 if (process.env.VERCEL !== '1') {
