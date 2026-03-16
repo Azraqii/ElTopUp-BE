@@ -1,19 +1,22 @@
 import { prisma } from '../lib/prisma';
 
 export const syncUserToDatabase = async (supabaseUser: any) => {
-  // 'sub' di JWT Supabase adalah UUID unik user
-  const userId = supabaseUser.sub; 
+  // Handle both JWT payload format and Supabase user object format
+  const userId = supabaseUser.sub || supabaseUser.id;
   const email = supabaseUser.email;
 
-  // Lakukan Upsert (Update atau Insert)
-  // Jika user sudah ada, abaikan. Jika belum, buat baru.
+  console.log('[syncUser] userId:', userId, 'length:', userId?.length);
+
+  if (!userId || !email) {
+    throw new Error(`Missing userId or email: userId=${userId}, email=${email}`);
+  }
+
   const user = await prisma.user.upsert({
     where: { id: userId },
-    update: {}, // Tidak ada yang diupdate jika sudah ada
+    update: {},
     create: {
       id: userId,
       email: email,
-      // Jika login pakai Google, Supabase biasanya menyimpan nama di user_metadata
       name: supabaseUser.user_metadata?.full_name || supabaseUser.user_metadata?.name || 'User',
     },
   });
