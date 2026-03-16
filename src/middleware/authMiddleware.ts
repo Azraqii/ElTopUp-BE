@@ -2,17 +2,22 @@ import { Request, Response, NextFunction } from 'express';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 
 export interface AuthRequest extends Request {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   user?: any;
 }
 
-// Supabase public JWKS endpoint — returns EC public keys for ES256 verification.
-// createRemoteJWKSet caches the keys and re-fetches when needed.
-const JWKS = createRemoteJWKSet(
-  new URL(
-    `https://${process.env.SUPABASE_PROJECT_REF}.supabase.co/auth/v1/.well-known/jwks.json`,
-  ),
-);
+// Lazy — jangan inisialisasi di top level
+let _JWKS: ReturnType<typeof createRemoteJWKSet> | null = null;
+
+function getJWKS() {
+  if (!_JWKS) {
+    const ref = process.env.SUPABASE_PROJECT_REF;
+    if (!ref) throw new Error('SUPABASE_PROJECT_REF is not set');
+    _JWKS = createRemoteJWKSet(
+      new URL(`https://${ref}.supabase.co/auth/v1/.well-known/jwks.json`)
+    );
+  }
+  return _JWKS;
+}
 
 export const requireAuth = async (
   req: AuthRequest,
@@ -29,11 +34,10 @@ export const requireAuth = async (
   const token = authHeader.split(' ')[1];
 
   try {
-    const { payload } = await jwtVerify(token, JWKS, {
+    const { payload } = await jwtVerify(token, getJWKS(), {
       issuer: `https://${process.env.SUPABASE_PROJECT_REF}.supabase.co/auth/v1`,
       audience: 'authenticated',
     });
-    // payload.sub = Supabase user UUID
     req.user = payload;
     next();
   } catch (error) {
