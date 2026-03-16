@@ -1,25 +1,16 @@
 import { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
-import jwksClient from 'jwks-rsa';
+import { createClient } from '@supabase/supabase-js';
 
 export interface AuthRequest extends Request { user?: any; }
 
-const client = jwksClient({
-  jwksUri: `https://${process.env.SUPABASE_PROJECT_REF}.supabase.co/auth/v1/.well-known/jwks.json`,
-  cache: true,
-  cacheMaxAge: 3600000,
-});
+const supabase = createClient(
+  `https://${process.env.SUPABASE_PROJECT_REF}.supabase.co`,
+  process.env.SUPABASE_ANON_KEY as string,
+);
 
-function getKey(header: jwt.JwtHeader, callback: jwt.SigningKeyCallback) {
-  client.getSigningKey(header.kid, (err, key) => {
-    if (err) return callback(err);
-    callback(null, key?.getPublicKey());
-  });
-}
-
-export const requireAuth = (
+export const requireAuth = async (
   req: AuthRequest, res: Response, next: NextFunction,
-): void => {
+): Promise<void> => {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith('Bearer ')) {
     res.status(401).json({ error: 'Unauthorized: No token provided' });
@@ -28,12 +19,17 @@ export const requireAuth = (
 
   const token = authHeader.split(' ')[1];
 
-  jwt.verify(token, getKey, { audience: 'authenticated' }, (err, payload) => {
-    if (err) {
-      res.status(403).json({ error: 'Forbidden: Invalid or expired token', detail: err.message });
-      return;
-    }
-    req.user = payload;
-    next();
-  });
+  const { data, error } = await supabase.auth.getUser(token);
+
+  if (error || !data.user) {
+    res.status(403).json({ error: 'Forbidden: Invalid or expired token', detail: error?.message });
+    return;
+  }
+
+  req.user = { 
+    sub: data.user.id, 
+    email: data.user.email, 
+    ...data.user.user_metadata 
+  };
+  next();
 };
