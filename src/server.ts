@@ -2,8 +2,10 @@ import express, { type Request, type Response } from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
 
-// Load env vars first
-dotenv.config();
+// Hanya load .env di local development
+if (process.env.NODE_ENV !== 'production') {
+  dotenv.config();
+}
 
 // Import Routes
 import authRoutes from './routes/authRoutes';
