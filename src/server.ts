@@ -3,7 +3,9 @@ import dotenv from 'dotenv';
 import cors from 'cors';
 
 // Load env vars first
-dotenv.config();
+if (process.env.NODE_ENV !== 'production') {
+  dotenv.config();
+}
 
 // Validate required environment variables
 import { validateEnvironmentVariables } from './utils/validateEnv';
