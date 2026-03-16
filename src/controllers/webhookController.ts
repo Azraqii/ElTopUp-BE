@@ -4,6 +4,16 @@ import { prisma } from '../lib/prisma';
 import { createRobuxshipOrder } from '../services/robuxshipService';
 
 const MIDTRANS_SERVER_KEY = process.env.MIDTRANS_SERVER_KEY as string;
+const MIDTRANS_IS_PRODUCTION = String(process.env.MIDTRANS_IS_PRODUCTION || 'false').toLowerCase() === 'true';
+const ROBUXSHIP_AUTO_FULFILLMENT = (() => {
+  const override = process.env.ROBUXSHIP_AUTO_FULFILLMENT;
+
+  if (override === undefined || override === '') {
+    return MIDTRANS_IS_PRODUCTION;
+  }
+
+  return String(override).toLowerCase() === 'true';
+})();
 
 // ------------------------------------------------------------------
 // POST /api/webhooks/midtrans
@@ -62,12 +72,30 @@ export const midtransWebhook = async (req: Request, res: Response): Promise<void
           data: { paymentStatus: 'PAID' },
         });
 
-        // OTOMATIS TEMBAK KE ROBUXSHIP!
-        // Gunakan blok try-catch agar webhook membalas 200 OK ke Midtrans walau RobuxShip error
-        try {
-          await createRobuxshipOrder(orderId);
-        } catch (err: any) {
-          console.error(`[Webhook Midtrans] Gagal menembak RobuxShip untuk Order ${orderId}:`, err.message);
+        if (!ROBUXSHIP_AUTO_FULFILLMENT) {
+          await prisma.systemLog.create({
+            data: {
+              orderId,
+              serviceName: 'ROBUXSHIP',
+              eventType: 'AUTO_FULFILLMENT_SKIPPED',
+              payloadData: {
+                reason: MIDTRANS_IS_PRODUCTION ? 'disabled_by_env' : 'midtrans_sandbox_mode',
+                midtransOrderId: externalOrderId,
+                transactionStatus,
+              },
+              status: 'INFO',
+            },
+          });
+
+          console.log(`[Webhook Midtrans] Auto-fulfillment RobuxShip dilewati untuk Order ${orderId}`);
+        } else {
+          // OTOMATIS TEMBAK KE ROBUXSHIP!
+          // Gunakan blok try-catch agar webhook membalas 200 OK ke Midtrans walau RobuxShip error
+          try {
+            await createRobuxshipOrder(orderId);
+          } catch (err: any) {
+            console.error(`[Webhook Midtrans] Gagal menembak RobuxShip untuk Order ${orderId}:`, err.message);
+          }
         }
       }
     } else if (transactionStatus === 'cancel' || transactionStatus === 'deny' || transactionStatus === 'expire') {
