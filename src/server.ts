@@ -8,7 +8,7 @@ const app = express();
 app.use(express.json());
 
 app.get('/', (_req: Request, res: Response) => {
-  res.json({ status: 'ok', step: 'all-with-routes' });
+  res.json({ status: 'ok', step: 'no-webhook-routes' });
 });
 
 app.post('/api/auth/register', register);
@@ -20,8 +20,5 @@ app.post('/api/orders/checkout', requireAuth, checkout);
 app.get('/api/orders', requireAuth, getMyOrders);
 app.get('/api/orders/:id/status', requireAuth, getOrderStatus);
 app.post('/api/orders/:id/mock-pay', requireAuth, mockPayOrder);
-
-app.post('/api/webhooks/midtrans', midtransWebhook);
-app.post('/api/webhooks/robuxship', robuxshipWebhook);
 
 export default app;
