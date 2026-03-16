@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node dist/server.js",
     "dev": "cross-env TS_NODE_FILES=true nodemon --ext ts --exec ts-node -T src/server.ts",
-    "build": "npx prisma generate && tsc"
+    "build": "npx prisma generate && tsc",
+    "vercel-build": "npx prisma generate"
   },
   "keywords": [],
   "author": "",
