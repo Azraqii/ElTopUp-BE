@@ -26,10 +26,10 @@ export const requireAuth = async (
     return;
   }
 
-  req.user = { 
-    sub: data.user.id, 
-    email: data.user.email, 
-    ...data.user.user_metadata 
+  req.user = {
+    ...data.user.user_metadata,  // spread dulu agar tidak override field penting
+    sub: data.user.id,           // UUID Supabase yang benar (36 karakter)
+    email: data.user.email,
   };
   next();
 };
