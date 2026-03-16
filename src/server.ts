@@ -52,6 +52,19 @@ app.get('/', (_req: Request, res: Response) => {
   res.json({ status: 'ok', service: 'El TopUp API' });
 });
 
+app.get('/debug-env', (_req: Request, res: Response) => {
+  res.json({
+    node_env: process.env.NODE_ENV,
+    startup_error: startupConfigError?.message || null,
+    has_supabase_ref: !!process.env.SUPABASE_PROJECT_REF,
+    has_supabase_anon: !!process.env.SUPABASE_ANON_KEY,
+    has_db_url: !!process.env.DATABASE_URL,
+    has_midtrans_server: !!process.env.MIDTRANS_SERVER_KEY,
+    has_midtrans_client: !!process.env.MIDTRANS_CLIENT_KEY,
+    has_robuxship: !!process.env.ROBUXSHIP_API_KEY,
+  });
+});
+
 // ── Routes ───────────────────────────────────────────────────────────
 app.use('/api/auth', authRoutes);
 app.use('/api/orders', orderRoutes);
