@@ -7,7 +7,13 @@ dotenv.config();
 
 // Validate required environment variables
 import { validateEnvironmentVariables } from './utils/validateEnv';
-validateEnvironmentVariables();
+let startupConfigError: Error | null = null;
+try {
+  validateEnvironmentVariables();
+} catch (error) {
+  startupConfigError = error instanceof Error ? error : new Error('Unknown environment validation error');
+  console.error(startupConfigError.message);
+}
 
 // Import Routes
 import authRoutes from './routes/authRoutes';
@@ -25,6 +31,19 @@ app.use(cors({
   credentials: true,
 }));
 app.use(express.json());
+
+app.use((_req: Request, res: Response, next) => {
+  if (!startupConfigError) {
+    next();
+    return;
+  }
+
+  const isDevelopment = process.env.NODE_ENV !== 'production';
+  res.status(500).json({
+    error: 'Server configuration error. Check deployment logs.',
+    details: isDevelopment ? startupConfigError.message : undefined,
+  });
+});
 
 // ── Health check ────────────────────────────────────────────────────
 app.get('/', (_req: Request, res: Response) => {
