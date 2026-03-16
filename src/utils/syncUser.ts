@@ -1,6 +1,4 @@
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { prisma } from '../lib/prisma';
 
 export const syncUserToDatabase = async (supabaseUser: any) => {
   // 'sub' di JWT Supabase adalah UUID unik user
