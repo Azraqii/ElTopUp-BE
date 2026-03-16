@@ -1,53 +1,39 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
+import jwksClient from 'jwks-rsa';
 
 export interface AuthRequest extends Request { user?: any; }
 
-export const requireAuth = async (
+const client = jwksClient({
+  jwksUri: `https://${process.env.SUPABASE_PROJECT_REF}.supabase.co/auth/v1/.well-known/jwks.json`,
+  cache: true,
+  cacheMaxAge: 3600000,
+});
+
+function getKey(header: jwt.JwtHeader, callback: jwt.SigningKeyCallback) {
+  client.getSigningKey(header.kid, (err, key) => {
+    if (err) return callback(err);
+    callback(null, key?.getPublicKey());
+  });
+}
+
+export const requireAuth = (
   req: AuthRequest, res: Response, next: NextFunction,
-): Promise<void> => {
+): void => {
   const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  if (!authHeader?.startsWith('Bearer ')) {
     res.status(401).json({ error: 'Unauthorized: No token provided' });
     return;
   }
 
   const token = authHeader.split(' ')[1];
 
-  try {
-    const secret = process.env.SUPABASE_JWT_SECRET as string;
-    if (!secret) throw new Error('SUPABASE_JWT_SECRET not set');
-
-    // Decode token header to see what algorithm is used
-    const decoded = jwt.decode(token, { complete: true });
-    
-    // Try raw secret first
-    let payload: any;
-    let method = '';
-    
-    try {
-      payload = jwt.verify(token, secret, { audience: 'authenticated' });
-      method = 'raw';
-    } catch {
-      try {
-        payload = jwt.verify(token, Buffer.from(secret, 'base64'), { audience: 'authenticated' });
-        method = 'base64';
-      } catch (err2: any) {
-        // Return debug info
-        res.status(403).json({ 
-          error: 'Both methods failed',
-          tokenHeader: decoded?.header,
-          tokenPayload: (decoded?.payload as any)?.aud,
-          secretLength: secret.length,
-          err: err2.message
-        });
-        return;
-      }
+  jwt.verify(token, getKey, { audience: 'authenticated' }, (err, payload) => {
+    if (err) {
+      res.status(403).json({ error: 'Forbidden: Invalid or expired token', detail: err.message });
+      return;
     }
-
     req.user = payload;
     next();
-  } catch (err: any) {
-    res.status(403).json({ error: err.message });
-  }
+  });
 };
