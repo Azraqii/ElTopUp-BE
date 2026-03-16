@@ -1,13 +1,11 @@
 import express, { type Request, type Response } from 'express';
-import authRoutes from './routes/authRoutes';
+import { requireAuth } from './middleware/authMiddleware';
 
 const app = express();
 app.use(express.json());
 
 app.get('/', (_req: Request, res: Response) => {
-  res.json({ status: 'ok', step: 'auth-only' });
+  res.json({ status: 'ok', step: 'middleware-only' });
 });
-
-app.use('/api/auth', authRoutes);
 
 export default app;
