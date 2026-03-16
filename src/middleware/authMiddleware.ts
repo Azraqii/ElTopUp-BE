@@ -1,22 +1,35 @@
 import { Request, Response, NextFunction } from 'express';
-import { createRemoteJWKSet, jwtVerify } from 'jose';
+import jwt from 'jsonwebtoken';
+import axios from 'axios';
 
 export interface AuthRequest extends Request {
   user?: any;
 }
 
-// Lazy — jangan inisialisasi di top level
-let _JWKS: ReturnType<typeof createRemoteJWKSet> | null = null;
+let _publicKeys: Record<string, string> = {};
+let _keysLastFetched = 0;
 
-function getJWKS() {
-  if (!_JWKS) {
-    const ref = process.env.SUPABASE_PROJECT_REF;
-    if (!ref) throw new Error('SUPABASE_PROJECT_REF is not set');
-    _JWKS = createRemoteJWKSet(
-      new URL(`https://${ref}.supabase.co/auth/v1/.well-known/jwks.json`)
-    );
+async function getSupabasePublicKey(kid: string): Promise<string> {
+  const now = Date.now();
+  // Cache keys for 1 hour
+  if (_publicKeys[kid] && now - _keysLastFetched < 3600000) {
+    return _publicKeys[kid];
   }
-  return _JWKS;
+
+  const ref = process.env.SUPABASE_PROJECT_REF;
+  const response = await axios.get(
+    `https://${ref}.supabase.co/auth/v1/.well-known/jwks.json`
+  );
+
+  const keys = response.data.keys;
+  _keysLastFetched = now;
+
+  for (const key of keys) {
+    // Convert JWK to PEM using Supabase JWT secret instead
+    _publicKeys[key.kid] = key.n; // placeholder
+  }
+
+  return _publicKeys[kid];
 }
 
 export const requireAuth = async (
@@ -34,13 +47,16 @@ export const requireAuth = async (
   const token = authHeader.split(' ')[1];
 
   try {
-    const { payload } = await jwtVerify(token, getJWKS(), {
-      issuer: `https://${process.env.SUPABASE_PROJECT_REF}.supabase.co/auth/v1`,
+    const secret = process.env.SUPABASE_JWT_SECRET as string;
+    if (!secret) throw new Error('SUPABASE_JWT_SECRET not set');
+
+    const payload = jwt.verify(token, secret, {
       audience: 'authenticated',
     });
+
     req.user = payload;
     next();
-  } catch (error) {
+  } catch (error: any) {
     res.status(403).json({ error: 'Forbidden: Invalid or expired token' });
   }
 };
