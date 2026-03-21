@@ -87,7 +87,7 @@ export const midtransWebhook = async (req: Request, res: Response): Promise<void
         return;
       }
 
-      if (order.paymentStatus === 'UNPAID') {
+      if (order.paymentStatus === 'UNPAID' || order.paymentStatus === 'FAILED') {
         await prisma.order.update({
           where: { id: orderId },
           data: { paymentStatus: 'PAID' },
