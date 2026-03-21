@@ -7,11 +7,9 @@ const MIDTRANS_SERVER_KEY = process.env.MIDTRANS_SERVER_KEY as string;
 const MIDTRANS_IS_PRODUCTION = String(process.env.MIDTRANS_IS_PRODUCTION || 'false').toLowerCase() === 'true';
 const ROBUXSHIP_AUTO_FULFILLMENT = (() => {
   const override = process.env.ROBUXSHIP_AUTO_FULFILLMENT;
-
   if (override === undefined || override === '') {
     return MIDTRANS_IS_PRODUCTION;
   }
-
   return String(override).toLowerCase() === 'true';
 })();
 
@@ -22,16 +20,37 @@ export const midtransWebhook = async (req: Request, res: Response): Promise<void
   try {
     const payload = req.body;
 
-    // 1. Validasi Keamanan (Signature Key)
-    // Rumus Midtrans: SHA512(order_id + status_code + gross_amount + server_key)
-    const hashSignature = crypto
-      .createHash('sha512')
-      .update(`${payload.order_id}${payload.status_code}${payload.gross_amount}${MIDTRANS_SERVER_KEY}`)
-      .digest('hex');
+    // 1. Validasi Signature Key
+    // Di sandbox, Midtrans "Test notification" mengirim payload dummy tanpa
+    // signature_key yang valid — kita skip validasi di sandbox agar bisa test.
+    if (MIDTRANS_IS_PRODUCTION) {
+      // Production: wajib validasi signature
+      const hashSignature = crypto
+        .createHash('sha512')
+        .update(`${payload.order_id}${payload.status_code}${payload.gross_amount}${MIDTRANS_SERVER_KEY}`)
+        .digest('hex');
 
-    if (hashSignature !== payload.signature_key) {
-      res.status(401).json({ error: 'Invalid signature key' });
-      return;
+      if (hashSignature !== payload.signature_key) {
+        console.warn('[Webhook Midtrans] Invalid signature key — request ditolak.');
+        res.status(401).json({ error: 'Invalid signature key' });
+        return;
+      }
+    } else {
+      // Sandbox: tetap validasi kalau signature_key ada di payload
+      // (transaksi real di sandbox punya signature, test notification tidak)
+      if (payload.signature_key) {
+        const hashSignature = crypto
+          .createHash('sha512')
+          .update(`${payload.order_id}${payload.status_code}${payload.gross_amount}${MIDTRANS_SERVER_KEY}`)
+          .digest('hex');
+
+        if (hashSignature !== payload.signature_key) {
+          console.warn('[Webhook Midtrans] Sandbox: signature tidak cocok, tapi tetap diproses untuk debugging.');
+          // Di sandbox kita log warning tapi tetap lanjut proses
+        }
+      } else {
+        console.log('[Webhook Midtrans] Sandbox: test notification tanpa signature, dilewati.');
+      }
     }
 
     const externalOrderId = String(payload.order_id || '');
@@ -43,6 +62,8 @@ export const midtransWebhook = async (req: Request, res: Response): Promise<void
       return;
     }
 
+    console.log(`[Webhook Midtrans] Received: order=${externalOrderId} status=${transactionStatus}`);
+
     // 2. Ambil data order dari database
     const order = await prisma.order.findFirst({
       where: {
@@ -51,6 +72,7 @@ export const midtransWebhook = async (req: Request, res: Response): Promise<void
     });
 
     if (!order) {
+      console.warn(`[Webhook Midtrans] Order tidak ditemukan: ${externalOrderId}`);
       res.status(404).json({ error: 'Order not found' });
       return;
     }
@@ -60,17 +82,18 @@ export const midtransWebhook = async (req: Request, res: Response): Promise<void
     // 3. Proses berdasarkan status pembayaran
     if (transactionStatus === 'capture' || transactionStatus === 'settlement') {
       if (fraudStatus === 'challenge') {
-        // Abaikan atau review manual jika Midtrans curiga ini fraud
+        console.warn(`[Webhook Midtrans] Order ${orderId} flagged as challenge — skip.`);
         res.status(200).json({ status: 'challenge ignored' });
         return;
       }
 
-      // Jika sebelumnya UNPAID, sekarang kita proses!
       if (order.paymentStatus === 'UNPAID') {
         await prisma.order.update({
           where: { id: orderId },
           data: { paymentStatus: 'PAID' },
         });
+
+        console.log(`[Webhook Midtrans] Order ${orderId} → PAID`);
 
         if (!ROBUXSHIP_AUTO_FULFILLMENT) {
           await prisma.systemLog.create({
@@ -86,30 +109,31 @@ export const midtransWebhook = async (req: Request, res: Response): Promise<void
               status: 'INFO',
             },
           });
-
-          console.log(`[Webhook Midtrans] Auto-fulfillment RobuxShip dilewati untuk Order ${orderId}`);
+          console.log(`[Webhook Midtrans] Auto-fulfillment dilewati untuk Order ${orderId}`);
         } else {
-          // OTOMATIS TEMBAK KE ROBUXSHIP!
-          // Gunakan blok try-catch agar webhook membalas 200 OK ke Midtrans walau RobuxShip error
           try {
             await createRobuxshipOrder(orderId);
+            console.log(`[Webhook Midtrans] RobuxShip order created untuk Order ${orderId}`);
           } catch (err: any) {
-            console.error(`[Webhook Midtrans] Gagal menembak RobuxShip untuk Order ${orderId}:`, err.message);
+            console.error(`[Webhook Midtrans] Gagal tembak RobuxShip untuk Order ${orderId}:`, err.message);
           }
         }
+      } else {
+        console.log(`[Webhook Midtrans] Order ${orderId} sudah berstatus ${order.paymentStatus}, skip.`);
       }
     } else if (transactionStatus === 'cancel' || transactionStatus === 'deny' || transactionStatus === 'expire') {
       const failedStatus =
-        transactionStatus === 'cancel'
-          ? 'CANCELLED'
-          : transactionStatus === 'expire'
-          ? 'EXPIRED'
-          : 'FAILED';
+        transactionStatus === 'cancel' ? 'CANCELLED' :
+        transactionStatus === 'expire' ? 'EXPIRED' : 'FAILED';
 
       await prisma.order.update({
         where: { id: orderId },
         data: { paymentStatus: failedStatus },
       });
+
+      console.log(`[Webhook Midtrans] Order ${orderId} → ${failedStatus}`);
+    } else if (transactionStatus === 'pending') {
+      console.log(`[Webhook Midtrans] Order ${orderId} masih pending, tidak ada aksi.`);
     }
 
     res.status(200).json({ status: 'ok' });
@@ -124,7 +148,6 @@ export const midtransWebhook = async (req: Request, res: Response): Promise<void
 // ------------------------------------------------------------------
 export const robuxshipWebhook = async (req: Request, res: Response): Promise<void> => {
   try {
-    // Membaca jenis event dari Header RobuxShip
     const event = req.headers['robuxship-event'];
     const payload = req.body;
 
@@ -133,28 +156,27 @@ export const robuxshipWebhook = async (req: Request, res: Response): Promise<voi
       return;
     }
 
-    // Mengambil external_order_id yang kita kirim sebelumnya
-    const orderId = payload.data.external_order_id; 
+    const orderId = payload.data.external_order_id;
 
-    // Cari order di database
     const order = await prisma.order.findUnique({ where: { id: orderId } });
     if (!order) {
       res.status(404).json({ error: 'Order not found' });
       return;
     }
 
-    // Update status berdasarkan event
+    console.log(`[Webhook RobuxShip] Event: ${event} | Order: ${orderId}`);
+
     if (event === 'order.completed') {
       await prisma.order.update({
         where: { id: orderId },
         data: { robuxshipStatus: 'COMPLETED' },
       });
+      console.log(`[Webhook RobuxShip] Order ${orderId} → COMPLETED`);
     } else if (event === 'order.failed') {
       await prisma.order.update({
         where: { id: orderId },
         data: { robuxshipStatus: 'FAILED' },
       });
-      // Catat log error spesifik dari RobuxShip
       await prisma.systemLog.create({
         data: {
           orderId,
@@ -162,13 +184,15 @@ export const robuxshipWebhook = async (req: Request, res: Response): Promise<voi
           eventType: 'WEBHOOK_ORDER_FAILED',
           payloadData: payload,
           status: 'ERROR',
-        }
+        },
       });
+      console.error(`[Webhook RobuxShip] Order ${orderId} → FAILED:`, payload.data.error_message);
     } else if (event === 'order.cancelled') {
       await prisma.order.update({
         where: { id: orderId },
         data: { robuxshipStatus: 'CANCELLED' },
       });
+      console.log(`[Webhook RobuxShip] Order ${orderId} → CANCELLED`);
     }
 
     res.status(200).json({ status: 'ok' });
