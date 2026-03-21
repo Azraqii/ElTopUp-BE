@@ -39,6 +39,15 @@ app.use('/api/orders', async (req, res, next) => {
   }
 });
 
+app.use('/api/roblox', async (req, res, next) => {
+  try {
+    const { default: robloxRoutes } = await import('./routes/robloxRoutes');
+    robloxRoutes(req, res, next);
+  } catch (err: any) {
+    res.status(500).json({ error: 'ROBLOX_ROUTE_CRASH', message: err.message });
+  }
+});
+
 app.use('/api/webhooks', async (req, res, next) => {
   try {
     const { default: webhookRoutes } = await import('./routes/webhookRoutes');

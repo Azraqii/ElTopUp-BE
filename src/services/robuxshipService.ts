@@ -4,10 +4,11 @@ import { prisma } from '../lib/prisma';
 const ROBUXSHIP_BASE_URL = 'https://api.robuxship.com/v1';
 const ROBUXSHIP_API_KEY = process.env.ROBUXSHIP_API_KEY as string;
 
+// ✅ FIX
 const robuxshipClient = axios.create({
   baseURL: ROBUXSHIP_BASE_URL,
   headers: {
-    Authorization: `Bearer ${ROBUXSHIP_API_KEY}`,
+    'API-Key': ROBUXSHIP_API_KEY,
     'Content-Type': 'application/json',
   },
 });
