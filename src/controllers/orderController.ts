@@ -106,7 +106,6 @@ export const checkout = async (req: AuthRequest, res: Response): Promise<void> =
         customerName: user.name || user.email || 'El Top Up Customer',
         customerEmail: user.email || `${user.id}@eltopup.id`,
         description: `Top Up ${robuxAmount} Robux @${robloxUsername}`,
-        enabledPayments: ['qris'],
         callbacks: {
           finish: `${frontendBaseUrl}/pesanan/${order.id}`,
           pending: `${frontendBaseUrl}/pesanan/${order.id}`,
