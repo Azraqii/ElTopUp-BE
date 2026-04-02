@@ -45,35 +45,36 @@ export async function validateGamepass(
   username: string,
   grossAmount: number,
 ): Promise<ValidateGamepassResult> {
+  let response: any;
   try {
-    // Sesuai dokumen: POST /orders/validate dengan JSON Body [cite: 215, 216, 218]
-    const response = await robuxshipClient.post('/orders/validate', {
-      method: 'gamepass', 
-      amount: grossAmount, 
-      username: username 
+    response = await robuxshipClient.post('/orders/validate', {
+      method: 'gamepass',
+      amount: grossAmount,
+      username: username,
     });
-
-    const data = response.data;
-
-    // Sesuai dokumen: response berada langsung di root object [cite: 228-237]
-    if (!data.success || !data.valid) { 
-      throw new Error('Gamepass validation failed.');
-    }
-
-    return {
-      universeId: data.universe_id, 
-      placeId: data.place_id,
-      gamepassId: String(data.gamepass_id), 
-      userId: data.user_id, 
-      username: data.username, 
-      price: data.price, 
-      cost: data.cost, 
-    };
   } catch (err: any) {
-    // Standar error handling RobuxShip: err.response.data.error.message [cite: 106-114]
-    const errorMessage = err.response?.data?.error?.message || err.message || 'Gagal terhubung ke RobuxShip';
+    const errorMessage = err.response?.data?.error?.message || err.message || 'Gagal memvalidasi gamepass. Coba beberapa saat lagi.';
+    console.error('[validateGamepass] HTTP error:', JSON.stringify(err.response?.data ?? err.message));
     throw new Error(errorMessage);
   }
+
+  const data = response.data;
+  console.log('[validateGamepass] API response:', JSON.stringify(data));
+
+  if (!data.success || !data.valid) {
+    const reason = data.message || data.error?.message || JSON.stringify(data);
+    throw new Error(reason);
+  }
+
+  return {
+    universeId: data.universe_id,
+    placeId: data.place_id,
+    gamepassId: String(data.gamepass_id),
+    userId: data.user_id,
+    username: data.username,
+    price: data.price,
+    cost: data.cost,
+  };
 }
 
 // ------------------------------------------------------------------

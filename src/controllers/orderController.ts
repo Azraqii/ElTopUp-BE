@@ -5,6 +5,24 @@ import { syncUserToDatabase } from '../utils/syncUser';
 import { validateGamepass, syncRobuxshipStatus, createRobuxshipOrder } from '../services/robuxshipService';
 import { createSnapTransaction } from '../services/midtransService';
 
+const GAMEPASS_ERROR_TRANSLATIONS: Record<string, string> = {
+  'gamepass has regional pricing on': 'Gamepass kamu menggunakan harga regional (Regional Pricing). Matikan Regional Pricing di pengaturan Roblox terlebih dahulu.',
+  'gamepass not found': 'Gamepass tidak ditemukan. Pastikan kamu sudah membuat gamepass dengan harga yang sesuai.',
+  'user not found': 'Username Roblox tidak ditemukan. Periksa kembali username yang kamu masukkan.',
+  'invalid amount': 'Jumlah Robux tidak valid.',
+  'gamepass price mismatch': 'Harga gamepass tidak sesuai. Pastikan harga gamepass sama persis dengan jumlah yang diminta.',
+  'gamepass is not on sale': 'Gamepass belum dijual. Aktifkan penjualan gamepass di pengaturan Roblox.',
+  'gamepass is disabled': 'Gamepass dinonaktifkan. Aktifkan kembali gamepass kamu di Roblox.',
+};
+
+function translateGamepassError(message: string): string {
+  const lower = message.toLowerCase();
+  for (const [key, translation] of Object.entries(GAMEPASS_ERROR_TRANSLATIONS)) {
+    if (lower.includes(key)) return translation;
+  }
+  return message;
+}
+
 
 // Konfigurasi Rate Harga — 4.7 USD per 1000 Gross Robux
 const RATE_USD_PER_1K_GROSS_ROBUX = 4.7;
@@ -56,9 +74,8 @@ export const checkout = async (req: AuthRequest, res: Response): Promise<void> =
         },
       });
       res.status(400).json({
-        error: 'Validasi gamepass gagal. Pastikan gamepass sudah dibuat dan harganya sesuai.',
-        details: validationError.message,
-        requiredGrossPrice: grossRobuxAmount // Beritahu frontend harga gamepass yang seharusnya
+        error: translateGamepassError(validationError.message),
+        requiredGrossPrice: grossRobuxAmount,
       });
       return;
     }
