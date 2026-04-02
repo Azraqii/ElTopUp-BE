@@ -1,6 +1,7 @@
 import express, { type Request, type Response } from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
+import passport from 'passport';
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config();
@@ -16,6 +17,7 @@ app.use(cors({
   credentials: true,
 }));
 app.use(express.json());
+app.use(passport.initialize());
 
 app.get('/', (_req: Request, res: Response) => {
   res.json({ status: 'ok', service: 'El TopUp API' });

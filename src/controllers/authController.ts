@@ -1,147 +1,76 @@
-import { Request, Response } from 'express';
-import axios from 'axios';
+import { Request, Response, NextFunction } from 'express';
+import passport from 'passport';
+import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
+import jwt from 'jsonwebtoken';
 import { AuthRequest } from '../middleware/authMiddleware';
-import { syncUserToDatabase } from '../utils/syncUser';
 import { prisma } from '../lib/prisma';
 
-const SUPABASE_URL = `https://${process.env.SUPABASE_PROJECT_REF}.supabase.co`;
-const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY as string;
+const JWT_SECRET = process.env.JWT_SECRET as string;
+const JWT_EXPIRES_IN = (process.env.JWT_EXPIRES_IN || '7d') as string;
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
 
-function friendlyAuthError(body: Record<string, unknown>): string {
-  const code = String(body.error_code || body.error || '').toLowerCase();
-  const message = String(body.error_description || body.msg || body.message || '').toLowerCase();
-  const combined = `${code} ${message}`.trim();
+const callbackURL = process.env.GOOGLE_CALLBACK_URL as string;
 
-  if (combined.includes('invalid login credentials') || combined.includes('invalid_grant') || combined.includes('invalid email or password'))
-    return 'Email atau password salah.';
-  if (combined.includes('user_already_exists') || combined.includes('user already registered') || combined.includes('already been registered'))
-    return 'Email sudah terdaftar.';
-  if (combined.includes('password should be at least') || combined.includes('weak_password'))
-    return 'Password minimal 6 karakter.';
-  if (combined.includes('unable to validate email') || combined.includes('invalid_email'))
-    return 'Format email tidak valid.';
-  if (combined.includes('email not confirmed') || combined.includes('email_not_confirmed'))
-    return 'Email belum diverifikasi. Cek inbox kamu.';
-  if (combined.includes('too many requests') || combined.includes('rate_limit') || combined.includes('over_email_send_rate_limit'))
-    return 'Terlalu banyak percobaan. Coba lagi nanti.';
-  if (combined.includes('user not found') || combined.includes('email_not_found'))
-    return 'Akun dengan email ini tidak ditemukan.';
+passport.use(
+  new GoogleStrategy(
+    {
+      clientID: process.env.GOOGLE_CLIENT_ID as string,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET as string,
+      callbackURL: callbackURL as string,
+    },
+    async (_accessToken, _refreshToken, profile, done) => {
+      try {
+        const email = profile.emails?.[0]?.value;
+        if (!email) return done(new Error('No email provided by Google'));
 
-  return String(body.msg || body.error_description || body.error || 'Terjadi kesalahan autentikasi.');
-}
+        const user = await prisma.user.upsert({
+          where: { email },
+          update: { name: profile.displayName },
+          create: { email, name: profile.displayName },
+        });
 
-export const register = async (req: Request, res: Response): Promise<void> => {
-  const { email, password, name } = req.body as {
-    email?: string;
-    password?: string;
-    name?: string;
-  };
+        done(null, user);
+      } catch (err) {
+        done(err as Error);
+      }
+    },
+  ),
+);
 
-  if (!email || !password) {
-    res.status(400).json({ error: 'Email dan password wajib diisi.' });
-    return;
-  }
+export const googleAuth = passport.authenticate('google', {
+  scope: ['profile', 'email'],
+  session: false,
+});
 
-  try {
-    const response = await axios.post(
-      `${SUPABASE_URL}/auth/v1/signup`,
-      { email, password, data: { full_name: name } },
-      { headers: { apikey: SUPABASE_ANON_KEY, 'Content-Type': 'application/json' } },
-    );
-
-    const { access_token, refresh_token, user } = response.data;
-
-    if (user) {
-      await syncUserToDatabase({
-        sub: user.id,
-        email: user.email,
-        user_metadata: user.user_metadata,
-      });
-    }
-
-    res.status(201).json({ access_token, refresh_token, user: { id: user?.id, email: user?.email } });
-  } catch (err) {
-    if (axios.isAxiosError(err) && err.response) {
-      res.status(400).json({ error: friendlyAuthError(err.response.data) });
+export const googleCallback = (req: Request, res: Response, next: NextFunction): void => {
+  passport.authenticate('google', { session: false }, (err: Error | null, user: any) => {
+    if (err || !user) {
+      res.redirect(`${FRONTEND_URL}/login?error=auth_failed`);
       return;
     }
-    res.status(500).json({ error: 'Terjadi kesalahan server.' });
-  }
-};
 
-export const login = async (req: Request, res: Response): Promise<void> => {
-  const { email, password } = req.body as { email?: string; password?: string };
-
-  if (!email || !password) {
-    res.status(400).json({ error: 'Email dan password wajib diisi.' });
-    return;
-  }
-
-  try {
-    const response = await axios.post(
-      `${SUPABASE_URL}/auth/v1/token?grant_type=password`,
-      { email, password },
-      { headers: { apikey: SUPABASE_ANON_KEY, 'Content-Type': 'application/json' } },
+    const token = jwt.sign(
+      { sub: user.id, email: user.email, role: user.role },
+      JWT_SECRET,
+      { expiresIn: JWT_EXPIRES_IN as any },
     );
 
-    const { access_token, refresh_token, user } = response.data;
-
-    await syncUserToDatabase({
-      sub: user.id,
-      email: user.email,
-      user_metadata: user.user_metadata,
-    });
-
-    res.status(200).json({ access_token, refresh_token, user: { id: user.id, email: user.email } });
-  } catch (err) {
-    if (axios.isAxiosError(err) && err.response) {
-      res.status(400).json({ error: friendlyAuthError(err.response.data) });
-      return;
-    }
-    res.status(500).json({ error: 'Terjadi kesalahan server.' });
-  }
-};
-
-export const syncProfile = async (req: AuthRequest, res: Response): Promise<void> => {
-  try {
-    const user = await syncUserToDatabase(req.user);
-    res.status(200).json({
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      role: user.role,
-    });
-  } catch (err) {
-    console.error('[syncProfile] Error syncing user:', err);
-    res.status(500).json({ error: 'Failed to sync user profile.' });
-  }
+    res.redirect(`${FRONTEND_URL}/auth/callback?token=${token}`);
+  })(req, res, next);
 };
 
 export const getMe = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const userId = req.user.sub as string;
-
-    const user = await prisma.user.findUnique({ where: { id: userId } });
+    const user = await prisma.user.findUnique({ where: { id: req.user.sub } });
 
     if (!user) {
-      const synced = await syncUserToDatabase(req.user);
-      res.status(200).json({
-        id: synced.id,
-        email: synced.email,
-        name: synced.name,
-        role: synced.role,
-      });
+      res.status(404).json({ error: 'User not found.' });
       return;
     }
 
-    res.status(200).json({
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      role: user.role,
-    });
+    res.status(200).json({ id: user.id, email: user.email, name: user.name, role: user.role });
   } catch (err) {
-    console.error('[getMe] Error fetching user:', err);
+    console.error('[getMe] Error:', err);
     res.status(500).json({ error: 'Failed to fetch user profile.' });
   }
 };

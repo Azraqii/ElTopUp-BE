@@ -5,8 +5,10 @@
 export function validateEnvironmentVariables(): void {
   // ── Wajib ada — server tidak bisa jalan tanpa ini ──────────────────────────
   const requiredEnvs = [
-    'SUPABASE_PROJECT_REF',
-    'SUPABASE_ANON_KEY',
+    'GOOGLE_CLIENT_ID',
+    'GOOGLE_CLIENT_SECRET',
+    'GOOGLE_CALLBACK_URL',
+    'JWT_SECRET',
     'DATABASE_URL',
     'MIDTRANS_SERVER_KEY',
     'MIDTRANS_CLIENT_KEY',
