@@ -1,16 +1,13 @@
 import { Request, Response, NextFunction } from 'express';
-import { createClient } from '@supabase/supabase-js';
+import jwt from 'jsonwebtoken';
 
 export interface AuthRequest extends Request { user?: any; }
 
-const supabase = createClient(
-  `https://${process.env.SUPABASE_PROJECT_REF}.supabase.co`,
-  process.env.SUPABASE_ANON_KEY as string,
-);
+const JWT_SECRET = process.env.JWT_SECRET as string;
 
-export const requireAuth = async (
+export const requireAuth = (
   req: AuthRequest, res: Response, next: NextFunction,
-): Promise<void> => {
+): void => {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith('Bearer ')) {
     res.status(401).json({ error: 'Unauthorized: No token provided' });
@@ -19,17 +16,11 @@ export const requireAuth = async (
 
   const token = authHeader.split(' ')[1];
 
-  const { data, error } = await supabase.auth.getUser(token);
-
-  if (error || !data.user) {
-    res.status(403).json({ error: 'Forbidden: Invalid or expired token', detail: error?.message });
-    return;
+  try {
+    const payload = jwt.verify(token, JWT_SECRET) as any;
+    req.user = payload;
+    next();
+  } catch {
+    res.status(403).json({ error: 'Forbidden: Invalid or expired token' });
   }
-
-  req.user = {
-    ...data.user.user_metadata,  // spread dulu agar tidak override field penting
-    sub: data.user.id,           // UUID Supabase yang benar (36 karakter)
-    email: data.user.email,
-  };
-  next();
 };

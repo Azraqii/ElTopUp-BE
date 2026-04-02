@@ -1,19 +1,16 @@
 import { Router } from 'express';
 import { requireAuth } from '../middleware/authMiddleware';
-import { register, login, syncProfile, getMe } from '../controllers/authController';
+import { googleAuth, googleCallback, getMe } from '../controllers/authController';
 
 const router = Router();
 
-// POST /api/auth/register — Register with email + password
-router.post('/register', register);
+// GET /api/auth/google — Redirect ke Google OAuth consent screen
+router.get('/google', googleAuth);
 
-// POST /api/auth/login — Login with email + password
-router.post('/login', login);
+// GET /api/auth/google/callback — Google redirect balik ke sini, lalu issue JWT
+router.get('/google/callback', googleCallback);
 
-// POST /api/auth/sync — Sync Google OAuth user to DB (requires JWT)
-router.post('/sync', requireAuth, syncProfile);
-
-// GET /api/auth/me — Return current user profile (requires JWT)
+// GET /api/auth/me — Return current user (requires JWT)
 router.get('/me', requireAuth, getMe);
 
 export default router;
