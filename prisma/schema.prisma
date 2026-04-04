@@ -1,3 +1,35 @@
+// prisma/schema.prisma
+// ═══════════════════════════════════════════════════════════════════
+// EL TOP UP — MILESTONE 2, FASE 0 — FINAL
+//
+// Keputusan yang sudah dikonfirmasi dan tidak akan berubah lagi:
+//
+// [1] Dua jenis order: ROBUX dan ITEM_GAME
+//
+// [2] ROBUX → RobuxShip otomatis, tidak bisa cancel setelah PAID
+//
+// [3] ITEM_GAME → admin deliver manual via MEETUP di Roblox.
+//     Ini berlaku untuk SEMUA jenis item termasuk Game Pass.
+//     Tidak ada flow "kirim langsung" — semuanya meetup.
+//
+// [4] Kategori item per game berbeda-beda (GameCategory).
+//     "Game Passes" di Fish It ≠ "Game Passes" di Sailor Piece —
+//     dua record terpisah, slug unique per game.
+//
+// [5] Quantity: minQty/maxQty per product.
+//     Game Pass → maxQty=1 (frontend sembunyikan input qty)
+//     Item biasa → maxQty>1 (frontend tampilkan input qty)
+//
+// [6] Cancel UNPAID → langsung, tanpa konfirmasi admin
+//     Cancel PAID Item → user request → admin approve/tolak → refund manual
+//     Cancel PAID Robux → tidak bisa
+//
+// PRINSIP MIGRATION:
+// Hanya menambah — tidak ada yang dihapus atau diubah.
+// Semua field baru nullable atau punya default value.
+// Data order Robux lama otomatis valid (orderType default "ROBUX").
+// ═══════════════════════════════════════════════════════════════════
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -8,118 +40,386 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
-// 1. Data Pengguna
+// ───────────────────────────────────────────────────────────────────
+// USER
+// Perubahan: +relasi adminNotes
+// ───────────────────────────────────────────────────────────────────
+
 model User {
   id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   email     String   @unique
   name      String?
-  role      String   @default("customer") 
+  role      String   @default("customer")
+  // Valid: "customer" | "admin"
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  
-  orders    Order[]
-  reviews   Review[] 
+
+  orders     Order[]
+  reviews    Review[]
+  adminNotes AdminOrderNote[] // BARU
 }
 
-// 2. Tabel Katalog Game
+// ───────────────────────────────────────────────────────────────────
+// GAME
+// Perubahan: +meetupWorldName, +relasi categories
+// ───────────────────────────────────────────────────────────────────
+
 model Game {
-  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name      String    @unique 
-  slug      String    @unique 
-  imageUrl  String?
-  isActive  Boolean   @default(true)
-  
-  products  Product[] 
+  id              String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name            String  @unique
+  slug            String  @unique
+  imageUrl        String?
+  isActive        Boolean @default(true)
 
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  // BARU: world default untuk meetup item di game ini.
+  // Admin bisa override per order via dashboard.
+  // Contoh: "Fish It Main World"
+  meetupWorldName String?
+
+  products   Product[]
+  categories GameCategory[] // BARU
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
-// 3. Product (Item jualan: Robux, Pedang, Ikan, dll)
+// ───────────────────────────────────────────────────────────────────
+// GAME CATEGORY — TABEL BARU
+//
+// Setiap game punya kategori item sendiri yang berbeda-beda.
+// Semua kategori terikat ke satu game — tidak ada kategori global.
+//
+// Contoh:
+//   Fish It:       Game Passes, Crates, Server Boosts, Wheel Spins, Coins
+//   Sailor Piece:  Game Passes, Bundles, Cosmetic Crates, Passive Shards...
+//   Drag Drive:    Game Passes, Cash
+//
+// "Game Passes" di Fish It dan Sailor Piece adalah DUA record berbeda
+// karena gameId berbeda. Unique constraint = (gameId + slug).
+//
+// Semua item termasuk Game Pass di-deliver via MEETUP.
+// Kategori "Game Passes" hanya mengelompokkan item di UI —
+// bukan menentukan flow pengiriman.
+// ───────────────────────────────────────────────────────────────────
+
+model GameCategory {
+  id        String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  gameId    String  @db.Uuid
+  name      String  // e.g. "Game Passes", "Passive Shards", "Crates"
+  slug      String  // e.g. "game-passes", "passive-shards"
+  sortOrder Int     @default(0) // urutan tab di frontend, kecil = lebih depan
+  isActive  Boolean @default(true)
+
+  game     Game      @relation(fields: [gameId], references: [id])
+  products Product[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([gameId, slug])
+  @@index([gameId, isActive, sortOrder])
+}
+
+// ───────────────────────────────────────────────────────────────────
+// PRODUCT
+// Perubahan: +categoryId, +minQty, +maxQty, +stockEnabled, +stockQty
+//
+// productType lama TETAP ADA — tidak dihapus agar kode lama tidak error.
+// Untuk semua item baru (Game Pass maupun item biasa), gunakan "GAME_ITEM".
+// ───────────────────────────────────────────────────────────────────
+
 model Product {
-  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  gameId      String?  @db.Uuid 
-  
-  name        String   
-  productType String   // "CURRENCY", "GAME_ITEM", "ACCOUNT"
-  priceIdr    Int      
-  isActive    Boolean  @default(true)
-  
+  id          String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  gameId      String? @db.Uuid
+  categoryId  String? @db.Uuid // BARU: FK ke GameCategory
+
+  name        String
+  productType String
+  // Lama: "CURRENCY" | "GAME_ITEM" | "ACCOUNT"
+  // Untuk item baru semua pakai "GAME_ITEM", termasuk Game Pass.
+  // productType tidak menentukan flow — orderType di Order yang menentukan.
+
+  priceIdr    Int
+  isActive    Boolean @default(true)
   imageUrl    String?
   description String?
 
-  game        Game?    @relation(fields: [gameId], references: [id])
-  orders      Order[]
-  reviews     Review[]
+  // BARU: kontrol quantity pembelian per item
+  //
+  // maxQty = 1  → Game Pass, item one-time
+  //              Frontend: sembunyikan input qty, langsung checkout qty=1
+  // maxQty > 1  → Item yang bisa dibeli banyak (Coins, Crates, dll)
+  //              Frontend: tampilkan input qty dengan batas min-max
+  minQty Int @default(1)
+  maxQty Int @default(1)
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  // BARU: stok terbatas (opsional per item)
+  // false = tidak dibatasi (default — cocok untuk Game Pass dan item unlimited)
+  // true  = dibatasi, checkout akan cek stockQty sebelum lanjut
+  stockEnabled Boolean @default(false)
+  stockQty     Int     @default(0)
+
+  game     Game?         @relation(fields: [gameId], references: [id])
+  category GameCategory? @relation(fields: [categoryId], references: [id])
+  orders   Order[]
+  reviews  Review[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([gameId, categoryId])
+  @@index([categoryId, isActive])
+  @@index([isActive])
 }
 
-// 4. Tabel Transaksi Utama
+// ───────────────────────────────────────────────────────────────────
+// ORDER — Satu tabel untuk SEMUA tipe order
+//
+// Dibedakan oleh field orderType:
+//
+//   "ROBUX"     → field aktif: robuxAmount, robloxGamepassId, robuxshipStatus
+//                 field null : productId, quantity(=1), adminStatus
+//                 Cancel     : hanya boleh jika paymentStatus = "UNPAID"
+//                 Setelah PAID: tidak bisa cancel, RobuxShip proses instan
+//
+//   "ITEM_GAME" → field aktif: productId, quantity, customerWhatsapp, adminStatus
+//                 field null : robuxAmount, robuxshipStatus (tidak dipakai)
+//                 Berlaku untuk SEMUA jenis item: biasa, Game Pass, Crates, dll.
+//                 Semuanya di-deliver via MEETUP oleh admin.
+//                 Cancel UNPAID: langsung cancelled
+//                 Cancel PAID  : user request → admin approve/tolak → refund manual
+//
+// State machine adminStatus (ITEM_GAME saja, null untuk ROBUX):
+//   null
+//   → PENDING_ADMIN   (otomatis saat webhook Midtrans PAID)
+//   → SCHEDULED       (admin set jadwal meetup)
+//   → DELIVERED       (admin konfirmasi item sudah diserahkan saat meetup) [FINAL OK]
+//   → CANCEL_REQUESTED (user ajukan cancel setelah PAID)
+//     → CANCELLED     (admin approve cancel) [FINAL CANCEL]
+//     → kembali ke status sebelumnya (admin tolak cancel)
+// ───────────────────────────────────────────────────────────────────
+
 model Order {
   id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId           String   @db.Uuid
-  productId        String?  @db.Uuid 
-  
-  robloxUsername   String      
+  productId        String?  @db.Uuid
+  // null  untuk ROBUX
+  // diisi untuk ITEM_GAME
+
+  robloxUsername   String
+  // ROBUX     : username pemilik gamepass yang dibuat user
+  // ITEM_GAME : username Roblox tujuan deliver item saat meetup
+
   customerPriceIdr Int
-  
-  robuxAmount      Int?     
-  robloxGamepassId String?     
-  
-  paymentStatus    String   @default("UNPAID") 
-  robuxshipStatus  String   @default("PENDING") 
-  
+  // Total harga yang dibayar = priceIdr × quantity
+
+  // ── Field existing ROBUX — TIDAK BERUBAH ──────────────────────
+  robuxAmount      Int?
+  robloxGamepassId String?
+  paymentStatus    String   @default("UNPAID")
+  // Valid: "UNPAID" | "PAID" | "CANCELLED" | "EXPIRED" | "FAILED"
+  robuxshipStatus  String   @default("PENDING")
+  // Valid: "PENDING"|"PROCESSING"|"COMPLETED"|"FAILED"|"CANCELLED"|"ERROR"
+  // Hanya relevan untuk orderType = "ROBUX"
   midtransOrderId  String?  @unique
-  robuxshipOrderId String?  @unique 
+  robuxshipOrderId String?  @unique
   midtransFeeIdr   Int?
   robuxshipCostUsd Decimal? @db.Decimal(10, 2)
-  
-  user             User        @relation(fields: [userId], references: [id])
-  product          Product?    @relation(fields: [productId], references: [id])
-  eventLogs        SystemLog[]
-  review           Review?     
 
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  // ── Field BARU ─────────────────────────────────────────────────
+
+  // Pembeda utama — default "ROBUX" agar semua data lama otomatis valid
+  orderType String @default("ROBUX")
+  // Valid: "ROBUX" | "ITEM_GAME"
+
+  // Jumlah item yang dibeli (hanya bermakna untuk ITEM_GAME)
+  quantity Int @default(1)
+
+  // Status dari sisi admin (hanya untuk ITEM_GAME, selalu null untuk ROBUX)
+  adminStatus String?
+  // Valid: "PENDING_ADMIN" | "SCHEDULED" | "DELIVERED"
+  //        "CANCEL_REQUESTED" | "CANCELLED"
+
+  // Menyimpan adminStatus sebelum CANCEL_REQUESTED
+  // Dipakai untuk restore jika admin tolak cancel
+  previousAdminStatus String?
+
+  // Nomor WA user — wajib untuk ITEM_GAME, null untuk ROBUX
+  // Dipakai admin untuk koordinasi jadwal meetup
+  customerWhatsapp String?
+
+  // Pesan singkat dari admin yang tampil ke user di detail pesanan
+  adminNote String?
+
+  // Snapshot info meetup dari ItemMeetupSlot
+  // Disalin ke sini agar halaman detail pesanan user tidak perlu join
+  meetupScheduledAt DateTime?
+  meetupWorld       String?
+  meetupServerCode  String?
+
+  // ── Cancel fields ─────────────────────────────────────────────
+  cancelReason      String?   // alasan cancel dari user
+  cancelRequestedAt DateTime? // waktu user request cancel
+  cancelledAt       DateTime? // waktu order resmi di-cancel
+
+  // ── Refund fields (manual — admin transfer ke rekening user) ──
+  refundStatus String?
+  // Valid: null (belum ada) | "PENDING_REFUND" | "REFUNDED"
+  refundedAt   DateTime?
+  refundNote   String?
+  // Contoh: "Transfer Rp16.965 ke BCA 1234567890 a.n. Budi Santoso"
+
+  // ── Relasi ────────────────────────────────────────────────────
+  user      User        @relation(fields: [userId], references: [id])
+  product   Product?    @relation(fields: [productId], references: [id])
+  eventLogs SystemLog[]
+  review    Review?
+
+  meetupSlot ItemMeetupSlot?  // BARU: one-to-one, hanya untuk ITEM_GAME
+  adminNotes AdminOrderNote[] // BARU: audit trail aksi admin
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // ── Index untuk performa ──────────────────────────────────────
+  @@index([userId, createdAt(sort: Desc)])  // halaman /pesanan user — paling sering
+  @@index([orderType, adminStatus])          // filter utama dashboard admin
+  @@index([paymentStatus, orderType])        // filter kombinasi status + tipe
+  @@index([adminStatus])                     // filter CANCEL_REQUESTED di dashboard
+  @@index([createdAt(sort: Desc)])           // listing order terbaru
 }
 
-// 5. Tabel Ulasan 
+// ───────────────────────────────────────────────────────────────────
+// ITEM MEETUP SLOT — TABEL BARU
+//
+// Menyimpan detail jadwal meetup per order ITEM_GAME.
+// Relasi one-to-one dengan Order.
+//
+// Berlaku untuk SEMUA item termasuk Game Pass — semua via meetup.
+// Admin set jadwal ini via dashboard setelah order PAID.
+// ───────────────────────────────────────────────────────────────────
+
+model ItemMeetupSlot {
+  id      String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orderId String @unique @db.Uuid
+
+  status String @default("SCHEDULED")
+  // Valid: "SCHEDULED" | "COMPLETED" | "MISSED" | "RESCHEDULED"
+
+  worldName     String   // nama world Roblox tempat meetup
+  serverCode    String?  // private server code, opsional
+  scheduledAt   DateTime // waktu meetup dijadwalkan
+  windowMinutes Int      @default(60) // batas waktu tunggu user (default 60 menit)
+  confirmedAt   DateTime? // diisi saat admin klik "Item Terkirim"
+  handledBy     String?  @db.Uuid // userId admin yang menangani
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  order Order @relation(fields: [orderId], references: [id])
+
+  @@index([status, scheduledAt])
+}
+
+// ───────────────────────────────────────────────────────────────────
+// ADMIN ORDER NOTE — TABEL BARU
+//
+// Audit trail setiap aksi admin pada sebuah order.
+// Setiap kali admin melakukan sesuatu (set jadwal, approve/tolak
+// cancel, konfirmasi refund), satu baris baru dibuat di sini.
+//
+// Contoh isi note:
+//   "Jadwal meetup: Fish It Main World | ABCD1234 | 10 Apr 14:00 WIB"
+//   "Cancel disetujui. Refund Rp16.965 sudah transfer ke BCA 1234."
+//   "Cancel ditolak. Item sedang dalam proses pengiriman."
+//   "Game Pass Double XP berhasil diserahkan ke NovaRBX saat meetup."
+// ───────────────────────────────────────────────────────────────────
+
+model AdminOrderNote {
+  id      String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orderId String @db.Uuid
+  adminId String @db.Uuid
+  note    String
+
+  createdAt DateTime @default(now())
+
+  order Order @relation(fields: [orderId], references: [id])
+  admin User  @relation(fields: [adminId], references: [id])
+
+  @@index([orderId])
+}
+
+// ───────────────────────────────────────────────────────────────────
+// DAILY SALES SUMMARY — TABEL BARU
+//
+// Cache agregasi penjualan harian untuk dashboard admin.
+// Tidak dihitung realtime — diisi via POST /admin/sync-daily
+// yang dipanggil manual atau via cron job harian.
+//
+// Manfaat: dashboard admin hanya baca 30 baris tabel ini
+// dibanding harus SUM jutaan baris Order setiap kali halaman dibuka.
+// ───────────────────────────────────────────────────────────────────
+
+model DailySalesSummary {
+  id   String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  date DateTime @unique // start of day UTC, e.g. 2026-04-04T00:00:00Z
+
+  robuxRevenue    Int @default(0) // total IDR dari order ROBUX yang PAID
+  itemRevenue     Int @default(0) // total IDR dari order ITEM_GAME yang DELIVERED
+  totalRevenue    Int @default(0)
+
+  robuxOrders     Int @default(0) // jumlah order ROBUX PAID
+  itemOrders      Int @default(0) // jumlah order ITEM_GAME DELIVERED
+  cancelledOrders Int @default(0) // jumlah order cancelled (semua tipe)
+  totalOrders     Int @default(0)
+
+  updatedAt DateTime @updatedAt
+
+  @@index([date(sort: Desc)])
+}
+
+// ───────────────────────────────────────────────────────────────────
+// MODEL LAMA — TIDAK DIUBAH SAMA SEKALI
+// Review, SystemLog, SystemConfig persis seperti sebelumnya.
+// Hanya SystemLog yang mendapat tambahan index (tidak ada field baru).
+// ───────────────────────────────────────────────────────────────────
+
 model Review {
   id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId    String   @db.Uuid
-  orderId   String   @unique @db.Uuid 
+  orderId   String   @unique @db.Uuid
   productId String?  @db.Uuid
-  
-  rating    Int      
+  rating    Int
   comment   String?
-  
-  user      User     @relation(fields: [userId], references: [id])
-  order     Order    @relation(fields: [orderId], references: [id])
-  product   Product? @relation(fields: [productId], references: [id])
+
+  user    User     @relation(fields: [userId], references: [id])
+  order   Order    @relation(fields: [orderId], references: [id])
+  product Product? @relation(fields: [productId], references: [id])
 
   createdAt DateTime @default(now())
 }
 
-// 6. Log Sistem (INI YANG TADI HILANG)
 model SystemLog {
   id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   orderId     String?  @db.Uuid
-  serviceName String   
+  serviceName String
   eventType   String
   payloadData Json
   status      String
   createdAt   DateTime @default(now())
 
-  order       Order?   @relation(fields: [orderId], references: [id])
+  order Order? @relation(fields: [orderId], references: [id])
+
+  // BARU: index — sebelumnya tidak ada, query log jadi lambat
+  @@index([orderId])
+  @@index([serviceName, eventType])
+  @@index([createdAt(sort: Desc)])
 }
 
-// 7. Konfigurasi Sistem (INI JUGA TADI HILANG)
 model SystemConfig {
   id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   key         String   @unique
   value       String
-  description String? 
+  description String?
   updatedAt   DateTime @updatedAt
 }
