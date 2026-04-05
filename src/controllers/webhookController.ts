@@ -1,3 +1,12 @@
+// src/controllers/webhookController.ts
+// MILESTONE 2 — ADDITIVE UPDATE
+// Semua logika lama dipertahankan persis.
+// Yang ditambahkan:
+//   - midtransWebhook: cek orderType sebelum RobuxShip
+//     ITEM_GAME → set adminStatus PENDING_ADMIN, skip RobuxShip
+//     ROBUX     → flow lama persis (ROBUXSHIP_AUTO_FULFILLMENT, dll)
+//   - robuxshipWebhook: tambah guard skip jika bukan ROBUX
+
 import { Request, Response } from 'express';
 import crypto from 'crypto';
 import { prisma } from '../lib/prisma';
@@ -5,6 +14,8 @@ import { createRobuxshipOrder } from '../services/robuxshipService';
 
 const MIDTRANS_SERVER_KEY = process.env.MIDTRANS_SERVER_KEY as string;
 const MIDTRANS_IS_PRODUCTION = String(process.env.MIDTRANS_IS_PRODUCTION || 'false').toLowerCase() === 'true';
+
+// Logika ROBUXSHIP_AUTO_FULFILLMENT lama — dipertahankan persis
 const ROBUXSHIP_AUTO_FULFILLMENT = (() => {
   const override = process.env.ROBUXSHIP_AUTO_FULFILLMENT;
   if (override === undefined || override === '') {
@@ -21,10 +32,8 @@ export const midtransWebhook = async (req: Request, res: Response): Promise<void
     const payload = req.body;
 
     // 1. Validasi Signature Key
-    // Di sandbox, Midtrans "Test notification" mengirim payload dummy tanpa
-    // signature_key yang valid — kita skip validasi di sandbox agar bisa test.
+    // Logika lama dipertahankan persis — sandbox skip, production wajib
     if (MIDTRANS_IS_PRODUCTION) {
-      // Production: wajib validasi signature
       const hashSignature = crypto
         .createHash('sha512')
         .update(`${payload.order_id}${payload.status_code}${payload.gross_amount}${MIDTRANS_SERVER_KEY}`)
@@ -37,7 +46,6 @@ export const midtransWebhook = async (req: Request, res: Response): Promise<void
       }
     } else {
       // Sandbox: tetap validasi kalau signature_key ada di payload
-      // (transaksi real di sandbox punya signature, test notification tidak)
       if (payload.signature_key) {
         const hashSignature = crypto
           .createHash('sha512')
@@ -46,7 +54,6 @@ export const midtransWebhook = async (req: Request, res: Response): Promise<void
 
         if (hashSignature !== payload.signature_key) {
           console.warn('[Webhook Midtrans] Sandbox: signature tidak cocok, tapi tetap diproses untuk debugging.');
-          // Di sandbox kita log warning tapi tetap lanjut proses
         }
       } else {
         console.log('[Webhook Midtrans] Sandbox: test notification tanpa signature, dilewati.');
@@ -64,7 +71,7 @@ export const midtransWebhook = async (req: Request, res: Response): Promise<void
 
     console.log(`[Webhook Midtrans] Received: order=${externalOrderId} status=${transactionStatus}`);
 
-    // 2. Ambil data order dari database
+    // 2. Ambil data order dari database — sama persis dengan lama
     const order = await prisma.order.findFirst({
       where: {
         OR: [{ midtransOrderId: externalOrderId }, { id: externalOrderId }],
@@ -88,40 +95,84 @@ export const midtransWebhook = async (req: Request, res: Response): Promise<void
       }
 
       if (order.paymentStatus === 'UNPAID' || order.paymentStatus === 'FAILED') {
-        await prisma.order.update({
-          where: { id: orderId },
-          data: { paymentStatus: 'PAID' },
-        });
 
-        console.log(`[Webhook Midtrans] Order ${orderId} → PAID`);
+        // ── PATCH MILESTONE 2 ─────────────────────────────────────
+        // Tentukan tindakan berdasarkan orderType.
+        // ROBUX     → flow lama persis (ROBUXSHIP_AUTO_FULFILLMENT)
+        // ITEM_GAME → set adminStatus PENDING_ADMIN, skip RobuxShip
+        // ──────────────────────────────────────────────────────────
 
-        if (!ROBUXSHIP_AUTO_FULFILLMENT) {
+        const isItemGame = order.orderType === 'ITEM_GAME';
+
+        if (isItemGame) {
+          // BARU: Item Game — update PAID + adminStatus sekaligus
+          await prisma.order.update({
+            where: { id: orderId },
+            data: {
+              paymentStatus: 'PAID',
+              adminStatus: 'PENDING_ADMIN',
+            },
+          });
+
+          console.log(`[Webhook Midtrans] Order ${orderId} → PAID | ITEM_GAME → adminStatus: PENDING_ADMIN`);
+
           await prisma.systemLog.create({
             data: {
               orderId,
-              serviceName: 'ROBUXSHIP',
-              eventType: 'AUTO_FULFILLMENT_SKIPPED',
+              serviceName: 'ITEM_GAME',
+              eventType: 'PAYMENT_RECEIVED_PENDING_ADMIN',
               payloadData: {
-                reason: MIDTRANS_IS_PRODUCTION ? 'disabled_by_env' : 'midtrans_sandbox_mode',
                 midtransOrderId: externalOrderId,
                 transactionStatus,
+                productId: order.productId,
+                quantity: order.quantity,
+                robloxUsername: order.robloxUsername,
               },
               status: 'INFO',
             },
           });
-          console.log(`[Webhook Midtrans] Auto-fulfillment dilewati untuk Order ${orderId}`);
+
         } else {
-          try {
-            await createRobuxshipOrder(orderId);
-            console.log(`[Webhook Midtrans] RobuxShip order created untuk Order ${orderId}`);
-          } catch (err: any) {
-            console.error(`[Webhook Midtrans] Gagal tembak RobuxShip untuk Order ${orderId}:`, err.message);
+          // LAMA: ROBUX — semua logika lama dipertahankan persis
+          await prisma.order.update({
+            where: { id: orderId },
+            data: { paymentStatus: 'PAID' },
+          });
+
+          console.log(`[Webhook Midtrans] Order ${orderId} → PAID`);
+
+          if (!ROBUXSHIP_AUTO_FULFILLMENT) {
+            await prisma.systemLog.create({
+              data: {
+                orderId,
+                serviceName: 'ROBUXSHIP',
+                eventType: 'AUTO_FULFILLMENT_SKIPPED',
+                payloadData: {
+                  reason: MIDTRANS_IS_PRODUCTION ? 'disabled_by_env' : 'midtrans_sandbox_mode',
+                  midtransOrderId: externalOrderId,
+                  transactionStatus,
+                },
+                status: 'INFO',
+              },
+            });
+            console.log(`[Webhook Midtrans] Auto-fulfillment dilewati untuk Order ${orderId}`);
+          } else {
+            try {
+              await createRobuxshipOrder(orderId);
+              console.log(`[Webhook Midtrans] RobuxShip order created untuk Order ${orderId}`);
+            } catch (err: any) {
+              console.error(`[Webhook Midtrans] Gagal tembak RobuxShip untuk Order ${orderId}:`, err.message);
+            }
           }
         }
+
       } else {
+        // Lama: skip jika sudah PAID
         console.log(`[Webhook Midtrans] Order ${orderId} sudah berstatus ${order.paymentStatus}, skip.`);
       }
+
     } else if (transactionStatus === 'cancel' || transactionStatus === 'deny' || transactionStatus === 'expire') {
+      // Lama: dipertahankan persis
       const failedStatus =
         transactionStatus === 'cancel' ? 'CANCELLED' :
         transactionStatus === 'expire' ? 'EXPIRED' : 'FAILED';
@@ -132,7 +183,9 @@ export const midtransWebhook = async (req: Request, res: Response): Promise<void
       });
 
       console.log(`[Webhook Midtrans] Order ${orderId} → ${failedStatus}`);
+
     } else if (transactionStatus === 'pending') {
+      // Lama: dipertahankan persis
       console.log(`[Webhook Midtrans] Order ${orderId} masih pending, tidak ada aksi.`);
     }
 
@@ -145,6 +198,8 @@ export const midtransWebhook = async (req: Request, res: Response): Promise<void
 
 // ------------------------------------------------------------------
 // POST /api/webhooks/robuxship
+// TAMBAHAN: guard skip jika order bukan ROBUX
+// Semua logika lama untuk ROBUX dipertahankan persis
 // ------------------------------------------------------------------
 export const robuxshipWebhook = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -164,8 +219,17 @@ export const robuxshipWebhook = async (req: Request, res: Response): Promise<voi
       return;
     }
 
+    // BARU: guard — RobuxShip webhook hanya relevan untuk ROBUX
+    // Kalau entah bagaimana RobuxShip mengirim webhook untuk non-ROBUX, skip saja
+    if (order.orderType !== 'ROBUX') {
+      console.warn(`[Webhook RobuxShip] Order ${orderId} bukan ROBUX (${order.orderType}), skip.`);
+      res.status(200).json({ status: 'ignored - not a robux order' });
+      return;
+    }
+
     console.log(`[Webhook RobuxShip] Event: ${event} | Order: ${orderId}`);
 
+    // Logika lama dipertahankan persis
     if (event === 'order.completed') {
       await prisma.order.update({
         where: { id: orderId },

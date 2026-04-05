@@ -1,3 +1,4 @@
+// src/server.ts
 import express, { type Request, type Response } from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
@@ -38,6 +39,26 @@ app.use('/api/orders', async (req, res, next) => {
     orderRoutes(req, res, next);
   } catch (err: any) {
     res.status(500).json({ error: 'ORDER_ROUTE_CRASH', message: err.message, stack: err.stack });
+  }
+});
+
+// BARU: Item Game routes — katalog publik + checkout + cancel
+app.use('/api/items', async (req, res, next) => {
+  try {
+    const { default: itemRoutes } = await import('./routes/itemRoutes');
+    itemRoutes(req, res, next);
+  } catch (err: any) {
+    res.status(500).json({ error: 'ITEM_ROUTE_CRASH', message: err.message, stack: err.stack });
+  }
+});
+
+// BARU: Admin dashboard routes — protected by requireAuth + requireAdmin
+app.use('/api/admin', async (req, res, next) => {
+  try {
+    const { default: adminRoutes } = await import('./routes/adminRoutes');
+    adminRoutes(req, res, next);
+  } catch (err: any) {
+    res.status(500).json({ error: 'ADMIN_ROUTE_CRASH', message: err.message, stack: err.stack });
   }
 });
 
