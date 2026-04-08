@@ -2,7 +2,7 @@ import { Response } from 'express';
 import { AuthRequest } from '../middleware/authMiddleware';
 import { prisma } from '../lib/prisma';
 import { syncUserToDatabase } from '../utils/syncUser';
-import { validateGamepass, syncRobuxshipStatus, createRobuxshipOrder } from '../services/robuxshipService';
+import { validateGamepass, syncRobuxshipStatus, createRobuxshipOrder, cancelRobuxshipOrder } from '../services/robuxshipService';
 import { createSnapTransaction } from '../services/midtransService';
 
 const GAMEPASS_ERROR_TRANSLATIONS: Record<string, string> = {
@@ -312,6 +312,64 @@ export const getMyOrders = async (req: AuthRequest, res: Response): Promise<void
   }
 };
 
+
+// ------------------------------------------------------------------
+// POST /api/orders/:id/cancel
+// Membatalkan order Robux jika masih dalam status PENDING di RobuxShip
+// ------------------------------------------------------------------
+export const cancelOrder = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+    const supabaseUser = req.user;
+
+    const order = await prisma.order.findUnique({
+      where: { id },
+    });
+
+    if (!order) {
+      res.status(404).json({ error: 'Order tidak ditemukan.' });
+      return;
+    }
+
+    if (order.userId !== supabaseUser.sub) {
+      res.status(403).json({ error: 'Anda tidak memiliki akses ke order ini.' });
+      return;
+    }
+
+    // Hanya order yang sudah PAID dan belum selesai yang bisa dibatalkan
+    if (order.paymentStatus !== 'PAID') {
+      res.status(400).json({ error: 'Hanya order yang sudah dibayar yang dapat dibatalkan.' });
+      return;
+    }
+
+    if (order.robuxshipStatus === 'COMPLETED') {
+      res.status(400).json({ error: 'Order ini sudah selesai dan tidak dapat dibatalkan.' });
+      return;
+    }
+
+    if (order.robuxshipStatus === 'CANCELLED') {
+      res.status(400).json({ error: 'Order ini sudah dibatalkan sebelumnya.' });
+      return;
+    }
+
+    // Coba batalkan di RobuxShip
+    try {
+      await cancelRobuxshipOrder(id);
+    } catch (cancelErr: any) {
+      res.status(400).json({ error: cancelErr.message });
+      return;
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Order berhasil dibatalkan. Dana Anda akan dikembalikan sesuai kebijakan refund.',
+      orderId: id,
+    });
+  } catch (err) {
+    console.error('[cancelOrder] Unexpected error:', err);
+    res.status(500).json({ error: 'Terjadi kesalahan internal saat membatalkan order.' });
+  }
+};
 
 // ------------------------------------------------------------------
 // POST /api/orders/:id/mock-pay (UNTUK TESTING - Phase 4: Payment & Fulfillment)

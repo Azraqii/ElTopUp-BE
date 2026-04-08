@@ -157,6 +157,66 @@ export async function createRobuxshipOrder(orderId: string): Promise<void> {
 }
 
 // ------------------------------------------------------------------
+// Phase 3b — Cancel RobuxShip Order
+// ------------------------------------------------------------------
+
+/**
+ * Calls DELETE /orders/{id} to cancel a pending RobuxShip order.
+ * Only orders with status 'pending' can be cancelled on RobuxShip side.
+ */
+export async function cancelRobuxshipOrder(orderId: string): Promise<void> {
+  const order = await prisma.order.findUniqueOrThrow({
+    where: { id: orderId },
+  });
+
+  // Gunakan robuxshipOrderId jika tersedia, fallback ke order.id sebagai external_order_id
+  const queryId = order.robuxshipOrderId || order.id;
+
+  try {
+    const response = await robuxshipClient.delete(`/orders/${queryId}`);
+    const data = response.data;
+
+    if (!data.success) {
+      throw new Error(data.error?.message || 'Gagal membatalkan order di RobuxShip.');
+    }
+
+    await prisma.order.update({
+      where: { id: orderId },
+      data: { robuxshipStatus: 'CANCELLED' },
+    });
+
+    await prisma.systemLog.create({
+      data: {
+        orderId,
+        serviceName: 'ROBUXSHIP',
+        eventType: 'CANCEL_ORDER_SUCCESS',
+        payloadData: data,
+        status: 'SUCCESS',
+      },
+    });
+  } catch (err: any) {
+    const errorData = err.response?.data || { message: err.message };
+    const errorCode = err.response?.data?.error?.code;
+
+    await prisma.systemLog.create({
+      data: {
+        orderId,
+        serviceName: 'ROBUXSHIP',
+        eventType: 'CANCEL_ORDER_FAILED',
+        payloadData: errorData,
+        status: 'ERROR',
+      },
+    });
+
+    if (errorCode === 'CANNOT_CANCEL') {
+      throw new Error('Order tidak dapat dibatalkan karena sudah dalam proses pengiriman.');
+    }
+
+    throw new Error(errorData.error?.message || err.message || 'Gagal membatalkan order di RobuxShip.');
+  }
+}
+
+// ------------------------------------------------------------------
 // Phase 4 — Poll RobuxShip Order Status
 // ------------------------------------------------------------------
 
