@@ -7,7 +7,8 @@
     "start": "node dist/server.js",
     "dev": "cross-env TS_NODE_FILES=true nodemon --ext ts --exec ts-node -T src/server.ts",
     "build": "npx prisma generate && tsc",
-    "vercel-build": "npx prisma generate"
+    "vercel-build": "npx prisma generate",
+    "create-admin": "ts-node src/scripts/createAdmin.ts"
   },
   "keywords": [],
   "author": "",
@@ -15,8 +16,10 @@
   "dependencies": {
     "@prisma/client": "^5.17.0",
     "@supabase/supabase-js": "^2.99.2",
+    "@types/bcrypt": "^6.0.0",
     "@types/cheerio": "^0.22.35",
     "axios": "^1.6.0",
+    "bcrypt": "^6.0.0",
     "bcryptjs": "^3.0.3",
     "cheerio": "^1.1.2",
     "cors": "^2.8.5",

@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard — El TopUp Admin</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+    nav { background: #1e293b; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #334155; }
+    nav .brand { font-size: 18px; font-weight: 700; color: #60a5fa; }
+    nav .links { display: flex; gap: 16px; }
+    nav a { color: #94a3b8; text-decoration: none; font-size: 14px; }
+    nav a:hover, nav a.active { color: #60a5fa; }
+    .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+    h1 { font-size: 24px; margin-bottom: 24px; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 32px; }
+    .stat-card { background: #1e293b; border-radius: 12px; padding: 20px; border: 1px solid #334155; }
+    .stat-card .label { font-size: 13px; color: #94a3b8; margin-bottom: 8px; }
+    .stat-card .value { font-size: 28px; font-weight: 700; }
+    .stat-card .value.blue { color: #60a5fa; }
+    .stat-card .value.green { color: #4ade80; }
+    .stat-card .value.yellow { color: #fbbf24; }
+    .stat-card .value.red { color: #f87171; }
+    table { width: 100%; border-collapse: collapse; background: #1e293b; border-radius: 12px; overflow: hidden; }
+    th { background: #334155; padding: 12px 16px; text-align: left; font-size: 13px; color: #94a3b8; font-weight: 600; }
+    td { padding: 12px 16px; border-top: 1px solid #334155; font-size: 14px; }
+    tr:hover td { background: #1e3a5f; }
+    .badge { display: inline-block; padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+    .badge-paid { background: #166534; color: #4ade80; }
+    .badge-unpaid { background: #713f12; color: #fbbf24; }
+    .badge-failed { background: #7f1d1d; color: #f87171; }
+    .badge-robux { background: #1e3a5f; color: #60a5fa; }
+    .badge-item { background: #365314; color: #a3e635; }
+    .clickable { cursor: pointer; }
+    #logout-btn { background: none; border: 1px solid #475569; color: #94a3b8; padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: 13px; }
+    #logout-btn:hover { border-color: #f87171; color: #f87171; }
+  </style>
+</head>
+<body>
+  <nav>
+    <span class="brand">El TopUp Admin</span>
+    <div class="links">
+      <a href="/admin-ui/dashboard.html" class="active">Dashboard</a>
+      <a href="/admin-ui/orders.html">Orders</a>
+      <a href="/admin-ui/settings.html">Settings</a>
+    </div>
+    <button id="logout-btn" onclick="logout()">Logout</button>
+  </nav>
+  <div class="container">
+    <h1>Dashboard</h1>
+    <div class="stats">
+      <div class="stat-card"><div class="label">Order Hari Ini (PAID)</div><div class="value blue" id="stat-orders">-</div></div>
+      <div class="stat-card"><div class="label">Revenue Hari Ini</div><div class="value green" id="stat-revenue">-</div></div>
+      <div class="stat-card"><div class="label">Pending Admin</div><div class="value yellow" id="stat-pending">-</div></div>
+      <div class="stat-card"><div class="label">Bot Processing</div><div class="value blue" id="stat-processing">-</div></div>
+      <div class="stat-card"><div class="label">Bot Failed (24h)</div><div class="value red" id="stat-failed">-</div></div>
+    </div>
+    <h2 style="font-size:18px;margin-bottom:16px;">10 Order Terbaru</h2>
+    <table>
+      <thead><tr><th>ID</th><th>Type</th><th>User</th><th>Payment</th><th>Harga</th><th>Tanggal</th></tr></thead>
+      <tbody id="recent-orders"><tr><td colspan="6" style="text-align:center;">Memuat...</td></tr></tbody>
+    </table>
+  </div>
+  <script>
+    const API_BASE = window.location.origin;
+    const adminToken = localStorage.getItem('adminToken');
+    if (!adminToken) window.location.href = '/admin-ui/login.html';
+
+    function headers() { return { 'Authorization': 'Bearer ' + adminToken, 'Content-Type': 'application/json' }; }
+    function logout() { localStorage.removeItem('adminToken'); window.location.href = '/admin-ui/login.html'; }
+    function formatIdr(n) { return 'Rp' + (n || 0).toLocaleString('id-ID'); }
+    function shortId(id) { return id ? id.substring(0, 8).toUpperCase() : '-'; }
+    function formatDate(d) { return new Date(d).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }); }
+
+    async function load() {
+      try {
+        const res = await fetch(API_BASE + '/api/admin/dashboard', { headers: headers() });
+        if (res.status === 403 || res.status === 401) { alert('Akses ditolak. Pastikan Anda login sebagai admin.'); logout(); return; }
+        const data = await res.json();
+
+        document.getElementById('stat-orders').textContent = data.totalOrdersToday;
+        document.getElementById('stat-revenue').textContent = formatIdr(data.totalRevenueToday);
+        document.getElementById('stat-pending').textContent = data.ordersPendingAdmin;
+        document.getElementById('stat-processing').textContent = data.ordersProcessing;
+        document.getElementById('stat-failed').textContent = data.ordersFailed;
+
+        const tbody = document.getElementById('recent-orders');
+        if (!data.recentOrders || data.recentOrders.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;">Belum ada order.</td></tr>';
+          return;
+        }
+        tbody.innerHTML = data.recentOrders.map(function(o) {
+          var typeBadge = o.orderType === 'ROBUX' ? '<span class="badge badge-robux">ROBUX</span>' : '<span class="badge badge-item">ITEM</span>';
+          var payBadge = o.paymentStatus === 'PAID' ? '<span class="badge badge-paid">PAID</span>' : o.paymentStatus === 'UNPAID' ? '<span class="badge badge-unpaid">UNPAID</span>' : '<span class="badge badge-failed">' + o.paymentStatus + '</span>';
+          return '<tr class="clickable" onclick="window.location.href=\'/admin-ui/order-detail.html?id=' + o.id + '\'">' +
+            '<td>' + shortId(o.id) + '</td>' +
+            '<td>' + typeBadge + '</td>' +
+            '<td>' + (o.user ? o.user.name || o.user.email : '-') + '</td>' +
+            '<td>' + payBadge + '</td>' +
+            '<td>' + formatIdr(o.customerPriceIdr) + '</td>' +
+            '<td>' + formatDate(o.createdAt) + '</td></tr>';
+        }).join('');
+      } catch (err) {
+        console.error('Dashboard load error:', err);
+      }
+    }
+    load();
+  </script>
+</body>
+</html>
