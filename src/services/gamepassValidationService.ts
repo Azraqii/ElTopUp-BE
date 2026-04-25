@@ -53,9 +53,17 @@ export async function findGamepassByPrice(
   const games = await getUserGames(robloxUser.userId);
 
   let scannedGamepasses = 0;
+  let skippedGames = 0;
 
   for (const game of games) {
-    const gamepasses = await getGameGamepasses(game.universeId);
+    let gamepasses: Awaited<ReturnType<typeof getGameGamepasses>>;
+    try {
+      gamepasses = await getGameGamepasses(game.universeId);
+    } catch (err) {
+      console.warn(`[findGamepassByPrice] Gagal fetch gamepass untuk game "${game.name}" (universeId ${game.universeId}): ${(err as Error).message}`);
+      skippedGames++;
+      continue;
+    }
     scannedGamepasses += gamepasses.length;
 
     for (const gp of gamepasses) {
@@ -82,6 +90,14 @@ export async function findGamepassByPrice(
         };
       }
     }
+  }
+
+  if (games.length === 0) {
+    throw new Error(
+      `Tidak ditemukan game yang dibuat oleh "${robloxUser.username}" (userId: ${robloxUser.userId}). ` +
+      `Pastikan kamu sudah membuat game/experience di Roblox dan game tersebut berstatus publik, ` +
+      `lalu buat gamepass dengan harga ${targetPrice} Robux di game tersebut.`,
+    );
   }
 
   return {

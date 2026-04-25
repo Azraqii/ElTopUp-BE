@@ -203,26 +203,39 @@ export interface UserGamepassInfo {
 
 export async function getUserGames(userId: number): Promise<{ universeId: number; name: string }[]> {
   const cookie = await getBotCookie();
-  const csrfToken = await getCsrfToken();
-  const headers = buildHeaders(cookie, csrfToken);
+  const headers: Record<string, string> = {
+    Cookie: `.ROBLOSECURITY=${cookie}`,
+    'User-Agent': USER_AGENT,
+    Accept: 'application/json',
+  };
 
   const games: { universeId: number; name: string }[] = [];
   let cursor: string | null = null;
 
-  while (true) {
-    const urlStr: string = `https://games.roblox.com/v2/users/${userId}/games?sortOrder=Desc&limit=50${cursor ? `&cursor=${cursor}` : ''}`;
-    const response = await axios.get(urlStr, { headers });
-    const body = response.data as { data?: { id: number; name: string }[]; nextPageCursor?: string };
+  try {
+    while (true) {
+      const urlStr = `https://games.roblox.com/v2/users/${userId}/games?sortOrder=Desc&limit=50&accessFilter=2${cursor ? `&cursor=${cursor}` : ''}`;
+      const response = await axios.get(urlStr, { headers });
+      const body = response.data as { data?: { id: number; name: string }[]; nextPageCursor?: string };
 
-    if (body.data) {
-      for (const game of body.data) {
-        games.push({ universeId: game.id, name: game.name });
+      if (body.data) {
+        for (const game of body.data) {
+          games.push({ universeId: game.id, name: game.name });
+        }
       }
-    }
 
-    cursor = body.nextPageCursor || null;
-    if (!cursor) break;
-    await sleep(300);
+      cursor = body.nextPageCursor || null;
+      if (!cursor) break;
+      await sleep(300);
+    }
+  } catch (err) {
+    const axiosErr = err as AxiosError;
+    const status = axiosErr.response?.status;
+    if (status === 404 || status === 403 || status === 400) {
+      console.warn(`[getUserGames] Roblox API returned ${status} for userId ${userId}, returning ${games.length} game(s) yang sudah di-fetch`);
+      return games;
+    }
+    throw new Error(`Gagal mengambil daftar game untuk userId ${userId}: ${(err as Error).message}`);
   }
 
   return games;
@@ -232,32 +245,47 @@ export async function getGameGamepasses(
   universeId: number,
 ): Promise<{ gamepassId: string; name: string; price: number; isForSale: boolean; sellerId: number }[]> {
   const cookie = await getBotCookie();
-  const csrfToken = await getCsrfToken();
-  const headers = buildHeaders(cookie, csrfToken);
+  const headers: Record<string, string> = {
+    Cookie: `.ROBLOSECURITY=${cookie}`,
+    'User-Agent': USER_AGENT,
+    Accept: 'application/json',
+  };
 
   const gamepasses: { gamepassId: string; name: string; price: number; isForSale: boolean; sellerId: number }[] = [];
   let cursor: string | null = null;
 
-  while (true) {
-    const urlStr: string = `https://games.roblox.com/v1/games/${universeId}/game-passes?sortOrder=Desc&limit=100${cursor ? `&cursor=${cursor}` : ''}`;
-    const response = await axios.get(urlStr, { headers });
-    const body = response.data as { data?: { id: number; name: string; price: number; isForSale: boolean; seller?: { id: number } }[]; nextPageCursor?: string };
+  try {
+    while (true) {
+      const urlStr = `https://games.roblox.com/v1/games/${universeId}/game-passes?sortOrder=Desc&limit=100${cursor ? `&cursor=${cursor}` : ''}`;
+      const response = await axios.get(urlStr, { headers });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const body = response.data as { data?: any[]; nextPageCursor?: string };
 
-    if (body.data) {
-      for (const gp of body.data) {
-        gamepasses.push({
-          gamepassId: String(gp.id),
-          name: gp.name || '',
-          price: gp.price || 0,
-          isForSale: gp.isForSale ?? false,
-          sellerId: gp.seller?.id || 0,
-        });
+      if (body.data) {
+        for (const gp of body.data) {
+          const price = gp.price ?? gp.PriceInRobux ?? 0;
+          gamepasses.push({
+            gamepassId: String(gp.id),
+            name: gp.name || '',
+            price,
+            isForSale: gp.isForSale ?? (price > 0),
+            sellerId: gp.sellerId ?? gp.seller?.id ?? 0,
+          });
+        }
       }
-    }
 
-    cursor = body.nextPageCursor || null;
-    if (!cursor) break;
-    await sleep(300);
+      cursor = body.nextPageCursor || null;
+      if (!cursor) break;
+      await sleep(300);
+    }
+  } catch (err) {
+    const axiosErr = err as AxiosError;
+    const status = axiosErr.response?.status;
+    if (status === 404 || status === 403) {
+      console.warn(`[getGameGamepasses] Roblox API returned ${status} for universeId ${universeId}, skipping`);
+      return gamepasses;
+    }
+    throw new Error(`Gagal mengambil gamepass untuk universeId ${universeId}: ${(err as Error).message}`);
   }
 
   return gamepasses;
