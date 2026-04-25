@@ -241,6 +241,18 @@ export async function getUserGames(userId: number): Promise<{ universeId: number
   return games;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function parseGamepassEntry(gp: any): { gamepassId: string; name: string; price: number; isForSale: boolean; sellerId: number } {
+  const price = gp.price ?? gp.PriceInRobux ?? gp.priceInRobux ?? 0;
+  return {
+    gamepassId: String(gp.id || gp.gamePassId || gp.Id),
+    name: gp.name || gp.Name || '',
+    price,
+    isForSale: gp.isForSale ?? gp.IsForSale ?? (price > 0),
+    sellerId: gp.sellerId ?? gp.seller?.id ?? gp.Creator?.Id ?? gp.creator?.id ?? gp.creatorId ?? 0,
+  };
+}
+
 export async function getGameGamepasses(
   universeId: number,
 ): Promise<{ gamepassId: string; name: string; price: number; isForSale: boolean; sellerId: number }[]> {
@@ -251,9 +263,11 @@ export async function getGameGamepasses(
     Accept: 'application/json',
   };
 
-  const gamepasses: { gamepassId: string; name: string; price: number; isForSale: boolean; sellerId: number }[] = [];
-  let cursor: string | null = null;
+  type GamepassEntry = { gamepassId: string; name: string; price: number; isForSale: boolean; sellerId: number };
+  let gamepasses: GamepassEntry[] = [];
 
+  // Endpoint utama: games.roblox.com (publik, tapi tidak return gamepass untuk game unrated)
+  let cursor: string | null = null;
   try {
     while (true) {
       const urlStr = `https://games.roblox.com/v1/games/${universeId}/game-passes?sortOrder=Desc&limit=100${cursor ? `&cursor=${cursor}` : ''}`;
@@ -263,14 +277,7 @@ export async function getGameGamepasses(
 
       if (body.data) {
         for (const gp of body.data) {
-          const price = gp.price ?? gp.PriceInRobux ?? 0;
-          gamepasses.push({
-            gamepassId: String(gp.id),
-            name: gp.name || '',
-            price,
-            isForSale: gp.isForSale ?? (price > 0),
-            sellerId: gp.sellerId ?? gp.seller?.id ?? 0,
-          });
+          gamepasses.push(parseGamepassEntry(gp));
         }
       }
 
@@ -281,11 +288,46 @@ export async function getGameGamepasses(
   } catch (err) {
     const axiosErr = err as AxiosError;
     const status = axiosErr.response?.status;
-    if (status === 404 || status === 403) {
-      console.warn(`[getGameGamepasses] Roblox API returned ${status} for universeId ${universeId}, skipping`);
+    if (status !== 404 && status !== 403) {
+      throw new Error(`Gagal mengambil gamepass untuk universeId ${universeId}: ${(err as Error).message}`);
+    }
+    console.warn(`[getGameGamepasses] Primary endpoint returned ${status} for universeId ${universeId}`);
+  }
+
+  if (gamepasses.length > 0) return gamepasses;
+
+  // Fallback 1: apis.roblox.com — endpoint Creator Dashboard, bisa akses gamepass meskipun game unrated
+  try {
+    const res = await axios.get(
+      `https://apis.roblox.com/game-passes/v1/game-passes?isArchived=false&universeId=${universeId}&limit=100`,
+      { headers },
+    );
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const items: any[] = res.data?.data || res.data?.gamePassList || [];
+    if (items.length > 0) {
+      gamepasses = items.map(parseGamepassEntry);
+      console.log(`[getGameGamepasses] Fallback 1 (apis.roblox.com) returned ${gamepasses.length} gamepass(es) for universeId ${universeId}`);
       return gamepasses;
     }
-    throw new Error(`Gagal mengambil gamepass untuk universeId ${universeId}: ${(err as Error).message}`);
+  } catch (err) {
+    console.warn(`[getGameGamepasses] Fallback 1 (apis.roblox.com) failed for universeId ${universeId}: ${(err as Error).message}`);
+  }
+
+  // Fallback 2: develop.roblox.com — development API
+  try {
+    const res = await axios.get(
+      `https://develop.roblox.com/v1/universes/${universeId}/game-passes?page=1&limit=50&sortOrder=Asc`,
+      { headers },
+    );
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const items: any[] = res.data?.data || [];
+    if (items.length > 0) {
+      gamepasses = items.map(parseGamepassEntry);
+      console.log(`[getGameGamepasses] Fallback 2 (develop.roblox.com) returned ${gamepasses.length} gamepass(es) for universeId ${universeId}`);
+      return gamepasses;
+    }
+  } catch (err) {
+    console.warn(`[getGameGamepasses] Fallback 2 (develop.roblox.com) failed for universeId ${universeId}: ${(err as Error).message}`);
   }
 
   return gamepasses;

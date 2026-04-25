@@ -37,6 +37,7 @@ export const scanGamepass = async (req: AuthRequest, res: Response): Promise<voi
       requiredPrice: scanResult.requiredPrice,
       grossRobuxAmount,
       netRobuxAmount: robuxAmount,
+      hint: scanResult.hint || null,
     });
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);

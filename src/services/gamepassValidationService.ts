@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { getCsrfToken, getGamepassProductInfo, getUserGames, getGameGamepasses, type UserGamepassInfo } from './robloxBotService';
+import { robuxshipValidateGamepass, isRobuxShipConfigured } from './robuxshipService';
 
 export interface GamepassValidationResult {
   valid: boolean;
@@ -18,6 +19,7 @@ export interface ScanGamepassResult {
   userId: number;
   username: string;
   requiredPrice: number;
+  hint?: string;
 }
 
 async function lookupRobloxUserId(username: string): Promise<{ userId: number; username: string }> {
@@ -67,27 +69,39 @@ export async function findGamepassByPrice(
     scannedGamepasses += gamepasses.length;
 
     for (const gp of gamepasses) {
-      if (
-        gp.sellerId === robloxUser.userId &&
-        gp.price === targetPrice &&
-        gp.isForSale
-      ) {
-        return {
-          found: true,
-          gamepass: {
-            gamepassId: gp.gamepassId,
-            name: gp.name,
-            price: gp.price,
-            isForSale: gp.isForSale,
-            sellerId: gp.sellerId,
-            gameName: game.name,
-          },
-          scannedGames: games.length,
-          scannedGamepasses,
-          userId: robloxUser.userId,
-          username: robloxUser.username,
-          requiredPrice: targetPrice,
-        };
+      if (gp.price === targetPrice && gp.isForSale) {
+        let confirmedSellerId = gp.sellerId;
+
+        // Jika sellerId tidak tersedia dari listing API (fallback endpoint),
+        // verifikasi langsung via product-info endpoint
+        if (confirmedSellerId === 0) {
+          try {
+            const csrfToken = await getCsrfToken();
+            const gpInfo = await getGamepassProductInfo(gp.gamepassId, csrfToken);
+            confirmedSellerId = gpInfo.sellerId;
+          } catch {
+            continue;
+          }
+        }
+
+        if (confirmedSellerId === robloxUser.userId) {
+          return {
+            found: true,
+            gamepass: {
+              gamepassId: gp.gamepassId,
+              name: gp.name,
+              price: gp.price,
+              isForSale: gp.isForSale,
+              sellerId: confirmedSellerId,
+              gameName: game.name,
+            },
+            scannedGames: games.length,
+            scannedGamepasses,
+            userId: robloxUser.userId,
+            username: robloxUser.username,
+            requiredPrice: targetPrice,
+          };
+        }
       }
     }
   }
@@ -100,6 +114,66 @@ export async function findGamepassByPrice(
     );
   }
 
+  // Fallback: pakai RobuxShip validate untuk menemukan gamepass
+  // (berguna jika game unrated sehingga Roblox API menyembunyikan gamepass)
+  if (isRobuxShipConfigured()) {
+    console.log(`[findGamepassByPrice] Scan langsung gagal (${scannedGamepasses} gamepass). Mencoba fallback RobuxShip validate...`);
+    const rsResult = await robuxshipValidateGamepass(robloxUser.username, targetPrice);
+
+    if (rsResult && rsResult.gamepass_id) {
+      const gamepassId = String(rsResult.gamepass_id);
+
+      let gpName = `Gamepass #${gamepassId}`;
+      let gpPrice = rsResult.price;
+      let gpIsForSale = true;
+      let gpSellerId = rsResult.user_id;
+
+      try {
+        const csrfToken = await getCsrfToken();
+        const gpInfo = await getGamepassProductInfo(gamepassId, csrfToken);
+        gpName = gpInfo.name;
+        gpPrice = gpInfo.price;
+        gpIsForSale = gpInfo.isForSale;
+        gpSellerId = gpInfo.sellerId;
+      } catch {
+        // Data dari RobuxShip sudah cukup
+      }
+
+      if (gpSellerId === robloxUser.userId && gpPrice === targetPrice && gpIsForSale) {
+        console.log(`[findGamepassByPrice] RobuxShip validate berhasil menemukan gamepass ${gamepassId}`);
+        return {
+          found: true,
+          gamepass: {
+            gamepassId,
+            name: gpName,
+            price: gpPrice,
+            isForSale: gpIsForSale,
+            sellerId: gpSellerId,
+            gameName: rsResult.universe_id ? `Universe ${rsResult.universe_id}` : 'Unknown',
+          },
+          scannedGames: games.length,
+          scannedGamepasses: scannedGamepasses + 1,
+          userId: robloxUser.userId,
+          username: robloxUser.username,
+          requiredPrice: targetPrice,
+        };
+      }
+    }
+  }
+
+  let hint: string | undefined;
+  if (games.length > 0 && scannedGamepasses === 0) {
+    hint =
+      'Game ditemukan tapi tidak ada gamepass yang terdeteksi. ' +
+      'Kemungkinan game kamu belum memiliki Experience Guidelines (rating). ' +
+      'Buka Creator Dashboard → game kamu → Configure → pilih "Experience Guidelines" → isi kuesionernya. ' +
+      'Setelah game di-rate, gamepass akan terlihat oleh sistem.';
+  } else if (scannedGamepasses > 0) {
+    hint =
+      `Ditemukan ${scannedGamepasses} gamepass, tapi tidak ada yang cocok dengan harga ${targetPrice} Robux. ` +
+      `Pastikan gamepass kamu berharga tepat ${targetPrice} Robux dan statusnya On Sale.`;
+  }
+
   return {
     found: false,
     scannedGames: games.length,
@@ -107,6 +181,7 @@ export async function findGamepassByPrice(
     userId: robloxUser.userId,
     username: robloxUser.username,
     requiredPrice: targetPrice,
+    hint,
   };
 }
 
