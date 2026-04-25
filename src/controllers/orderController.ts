@@ -2,11 +2,47 @@ import { Response } from 'express';
 import { AuthRequest } from '../middleware/authMiddleware';
 import { prisma } from '../lib/prisma';
 import { syncUserToDatabase } from '../utils/syncUser';
-import { validateGamepassForOrder } from '../services/gamepassValidationService';
+import { validateGamepassForOrder, findGamepassByPrice } from '../services/gamepassValidationService';
 import { createSnapTransaction } from '../services/midtransService';
 
 const RATE_USD_PER_1K_GROSS_ROBUX = 4.7;
 const RATE_IDR_PER_USD = 16950;
+
+// ------------------------------------------------------------------
+// POST /api/orders/scan-gamepass  — Preview scan gamepass tanpa buat order
+// ------------------------------------------------------------------
+export const scanGamepass = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { robloxUsername, robuxAmount } = req.body as {
+      robloxUsername: string;
+      robuxAmount: number;
+    };
+
+    if (!robloxUsername || !robuxAmount || robuxAmount < 50) {
+      res.status(400).json({ error: 'Username dan nominal Robux (minimal 50) wajib diisi.' });
+      return;
+    }
+
+    const grossRobuxAmount = Math.ceil(robuxAmount / 0.7);
+
+    const scanResult = await findGamepassByPrice(robloxUsername, grossRobuxAmount);
+
+    res.json({
+      found: scanResult.found,
+      gamepass: scanResult.gamepass || null,
+      scannedGames: scanResult.scannedGames,
+      scannedGamepasses: scanResult.scannedGamepasses,
+      userId: scanResult.userId,
+      username: scanResult.username,
+      requiredPrice: scanResult.requiredPrice,
+      grossRobuxAmount,
+      netRobuxAmount: robuxAmount,
+    });
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    res.status(400).json({ error: errorMessage });
+  }
+};
 
 // ------------------------------------------------------------------
 // POST /api/orders/checkout  — Order ROBUX
@@ -16,19 +52,13 @@ export const checkout = async (req: AuthRequest, res: Response): Promise<void> =
     const supabaseUser = req.user;
     const user = await syncUserToDatabase(supabaseUser);
 
-    const { robloxUsername, robuxAmount, gamepassLink } = req.body as {
+    const { robloxUsername, robuxAmount } = req.body as {
       robloxUsername: string;
       robuxAmount: number;
-      gamepassLink: string;
     };
 
     if (!robloxUsername || !robuxAmount || robuxAmount < 50) {
       res.status(400).json({ error: 'Username dan nominal Robux (minimal 50) wajib diisi.' });
-      return;
-    }
-
-    if (!gamepassLink) {
-      res.status(400).json({ error: 'Link gamepass wajib diisi.' });
       return;
     }
 
@@ -37,7 +67,7 @@ export const checkout = async (req: AuthRequest, res: Response): Promise<void> =
 
     let gamepassData;
     try {
-      gamepassData = await validateGamepassForOrder(robloxUsername, grossRobuxAmount, gamepassLink);
+      gamepassData = await validateGamepassForOrder(robloxUsername, grossRobuxAmount);
     } catch (validationError: unknown) {
       const errorMessage = validationError instanceof Error ? validationError.message : String(validationError);
       await prisma.systemLog.create({

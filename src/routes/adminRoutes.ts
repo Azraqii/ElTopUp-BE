@@ -7,6 +7,7 @@ import {
   getBotCookie,
   updateBotCookie,
   getDashboardStats,
+  getBotBalance,
 } from '../controllers/adminController';
 
 const router = Router();
@@ -14,6 +15,7 @@ const router = Router();
 router.use(requireAdminAuth);
 
 router.get('/dashboard', getDashboardStats);
+router.get('/bot-balance', getBotBalance);
 router.get('/orders', getOrders);
 router.get('/orders/:id', getOrderDetail);
 router.patch('/orders/:id/status', updateOrderStatus);

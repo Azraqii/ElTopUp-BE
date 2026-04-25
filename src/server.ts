@@ -1,13 +1,9 @@
+import './env';
 import express, { type Request, type Response } from 'express';
-import dotenv from 'dotenv';
 import cors from 'cors';
 import passport from 'passport';
 import path from 'path';
 import { ensureBotCookieConfig } from './services/robloxBotService';
-
-if (process.env.NODE_ENV !== 'production') {
-  dotenv.config();
-}
 
 const PORT: number = parseInt(process.env.PORT || '5001', 10);
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';

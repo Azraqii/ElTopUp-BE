@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { getCsrfToken, getGamepassProductInfo } from './robloxBotService';
+import { getCsrfToken, getGamepassProductInfo, getUserGames, getGameGamepasses, type UserGamepassInfo } from './robloxBotService';
 
 export interface GamepassValidationResult {
   valid: boolean;
@@ -10,26 +10,14 @@ export interface GamepassValidationResult {
   username: string;
 }
 
-function extractGamepassId(gamepassLink: string): string {
-  if (/^\d+$/.test(gamepassLink.trim())) {
-    return gamepassLink.trim();
-  }
-
-  const patterns = [
-    /game-pass\/(\d+)/i,
-    /gamepass\/(\d+)/i,
-    /id=(\d+)/i,
-    /\/(\d+)\//,
-  ];
-
-  for (const pattern of patterns) {
-    const match = gamepassLink.match(pattern);
-    if (match?.[1]) {
-      return match[1];
-    }
-  }
-
-  throw new Error('Format link gamepass tidak valid. Gunakan link Roblox atau ID gamepass langsung.');
+export interface ScanGamepassResult {
+  found: boolean;
+  gamepass?: UserGamepassInfo;
+  scannedGames: number;
+  scannedGamepasses: number;
+  userId: number;
+  username: string;
+  requiredPrice: number;
 }
 
 async function lookupRobloxUserId(username: string): Promise<{ userId: number; username: string }> {
@@ -56,21 +44,76 @@ async function lookupRobloxUserId(username: string): Promise<{ userId: number; u
   }
 }
 
-export async function validateGamepassForOrder(
+export async function findGamepassByPrice(
   username: string,
-  nominalIdr: number,
-  gamepassLink: string,
-): Promise<GamepassValidationResult> {
-  const gamepassId = extractGamepassId(gamepassLink);
-
+  targetPrice: number,
+): Promise<ScanGamepassResult> {
   const robloxUser = await lookupRobloxUserId(username);
 
+  const games = await getUserGames(robloxUser.userId);
+
+  let scannedGamepasses = 0;
+
+  for (const game of games) {
+    const gamepasses = await getGameGamepasses(game.universeId);
+    scannedGamepasses += gamepasses.length;
+
+    for (const gp of gamepasses) {
+      if (
+        gp.sellerId === robloxUser.userId &&
+        gp.price === targetPrice &&
+        gp.isForSale
+      ) {
+        return {
+          found: true,
+          gamepass: {
+            gamepassId: gp.gamepassId,
+            name: gp.name,
+            price: gp.price,
+            isForSale: gp.isForSale,
+            sellerId: gp.sellerId,
+            gameName: game.name,
+          },
+          scannedGames: games.length,
+          scannedGamepasses,
+          userId: robloxUser.userId,
+          username: robloxUser.username,
+          requiredPrice: targetPrice,
+        };
+      }
+    }
+  }
+
+  return {
+    found: false,
+    scannedGames: games.length,
+    scannedGamepasses,
+    userId: robloxUser.userId,
+    username: robloxUser.username,
+    requiredPrice: targetPrice,
+  };
+}
+
+export async function validateGamepassForOrder(
+  username: string,
+  grossRobuxAmount: number,
+): Promise<GamepassValidationResult> {
+  const targetPrice = grossRobuxAmount;
+
+  const scanResult = await findGamepassByPrice(username, targetPrice);
+
+  if (!scanResult.found || !scanResult.gamepass) {
+    throw new Error(
+      `Gamepass dengan harga ${targetPrice} Robux tidak ditemukan di akun "${scanResult.username}". ` +
+      `Pastikan kamu sudah membuat gamepass dengan harga ${targetPrice} Robux dan mengaktifkan penjualannya. ` +
+      `(${scanResult.scannedGames} game, ${scanResult.scannedGamepasses} gamepass di-scan)`,
+    );
+  }
+
   const csrfToken = await getCsrfToken();
-  const gpInfo = await getGamepassProductInfo(gamepassId, csrfToken);
+  const gpInfo = await getGamepassProductInfo(scanResult.gamepass.gamepassId, csrfToken);
 
-  const targetPrice = Math.ceil(nominalIdr / 0.7);
-
-  if (gpInfo.sellerId !== robloxUser.userId) {
+  if (gpInfo.sellerId !== scanResult.userId) {
     throw new Error(
       'Gamepass ini bukan milik kamu. Pastikan gamepass dibuat oleh akun Roblox yang kamu masukkan.',
     );
@@ -78,8 +121,8 @@ export async function validateGamepassForOrder(
 
   if (gpInfo.price !== targetPrice) {
     throw new Error(
-      `Harga Gamepass tidak sesuai. Harga yang dibutuhkan: ${targetPrice} Robux, ` +
-      `tapi gamepass kamu memiliki harga ${gpInfo.price} Robux.`,
+      `Harga Gamepass berubah sejak di-scan. Harga yang dibutuhkan: ${targetPrice} Robux, ` +
+      `tapi gamepass sekarang memiliki harga ${gpInfo.price} Robux.`,
     );
   }
 
@@ -91,10 +134,10 @@ export async function validateGamepassForOrder(
 
   return {
     valid: true,
-    gamepassId,
+    gamepassId: scanResult.gamepass.gamepassId,
     gamepassName: gpInfo.name,
     price: gpInfo.price,
-    userId: robloxUser.userId,
-    username: robloxUser.username,
+    userId: scanResult.userId,
+    username: scanResult.username,
   };
 }

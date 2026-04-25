@@ -1,7 +1,7 @@
 import { Response } from 'express';
 import { AuthRequest } from '../middleware/authMiddleware';
 import { prisma } from '../lib/prisma';
-import { purchaseGamepass } from '../services/robloxBotService';
+import { purchaseGamepass, getBotRobuxBalance } from '../services/robloxBotService';
 import { Prisma } from '@prisma/client';
 
 // ------------------------------------------------------------------
@@ -359,5 +359,19 @@ export const getDashboardStats = async (_req: AuthRequest, res: Response): Promi
   } catch (err) {
     console.error('[admin/getDashboardStats] Error:', err);
     res.status(500).json({ error: 'Gagal mengambil statistik dashboard.' });
+  }
+};
+
+// ------------------------------------------------------------------
+// GET /api/admin/bot-balance
+// ------------------------------------------------------------------
+export const getBotBalance = async (_req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const robux = await getBotRobuxBalance();
+    res.json({ robux });
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    console.error('[admin/getBotBalance] Error:', errorMessage);
+    res.status(500).json({ error: `Gagal mengambil saldo bot: ${errorMessage}` });
   }
 };

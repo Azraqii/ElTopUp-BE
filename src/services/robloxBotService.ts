@@ -192,6 +192,86 @@ export async function validateGamepassOwnership(
   };
 }
 
+export interface UserGamepassInfo {
+  gamepassId: string;
+  name: string;
+  price: number;
+  isForSale: boolean;
+  sellerId: number;
+  gameName: string;
+}
+
+export async function getUserGames(userId: number): Promise<{ universeId: number; name: string }[]> {
+  const cookie = await getBotCookie();
+  const csrfToken = await getCsrfToken();
+  const headers = buildHeaders(cookie, csrfToken);
+
+  const games: { universeId: number; name: string }[] = [];
+  let cursor: string | null = null;
+
+  while (true) {
+    const urlStr: string = `https://games.roblox.com/v2/users/${userId}/games?sortOrder=Desc&limit=50${cursor ? `&cursor=${cursor}` : ''}`;
+    const response = await axios.get(urlStr, { headers });
+    const body = response.data as { data?: { id: number; name: string }[]; nextPageCursor?: string };
+
+    if (body.data) {
+      for (const game of body.data) {
+        games.push({ universeId: game.id, name: game.name });
+      }
+    }
+
+    cursor = body.nextPageCursor || null;
+    if (!cursor) break;
+    await sleep(300);
+  }
+
+  return games;
+}
+
+export async function getGameGamepasses(
+  universeId: number,
+): Promise<{ gamepassId: string; name: string; price: number; isForSale: boolean; sellerId: number }[]> {
+  const cookie = await getBotCookie();
+  const csrfToken = await getCsrfToken();
+  const headers = buildHeaders(cookie, csrfToken);
+
+  const gamepasses: { gamepassId: string; name: string; price: number; isForSale: boolean; sellerId: number }[] = [];
+  let cursor: string | null = null;
+
+  while (true) {
+    const urlStr: string = `https://games.roblox.com/v1/games/${universeId}/game-passes?sortOrder=Desc&limit=100${cursor ? `&cursor=${cursor}` : ''}`;
+    const response = await axios.get(urlStr, { headers });
+    const body = response.data as { data?: { id: number; name: string; price: number; isForSale: boolean; seller?: { id: number } }[]; nextPageCursor?: string };
+
+    if (body.data) {
+      for (const gp of body.data) {
+        gamepasses.push({
+          gamepassId: String(gp.id),
+          name: gp.name || '',
+          price: gp.price || 0,
+          isForSale: gp.isForSale ?? false,
+          sellerId: gp.seller?.id || 0,
+        });
+      }
+    }
+
+    cursor = body.nextPageCursor || null;
+    if (!cursor) break;
+    await sleep(300);
+  }
+
+  return gamepasses;
+}
+
+export async function getBotRobuxBalance(): Promise<number> {
+  const cookie = await getBotCookie();
+  const headers = buildHeaders(cookie);
+  headers['Accept'] = 'application/json';
+
+  const res = await axios.get('https://economy.roblox.com/v1/user/currency', { headers });
+  return res.data?.robux ?? 0;
+}
+
 export async function ensureBotCookieConfig(): Promise<void> {
   const existing = await prisma.systemConfig.findUnique({
     where: { key: 'ROBLOX_BOT_COOKIE' },
