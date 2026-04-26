@@ -1,6 +1,6 @@
 # --- Dependencies ---
 node_modules/
-package-lock.json # (Opsional: Banyak orang menyimpannya, tapi jika ingin bersih boleh di-ignore)
+# package-lock.json TIDAK di-ignore agar Railway bisa install dengan versi yang tepat
 
 # --- Production Build ---
 dist/
