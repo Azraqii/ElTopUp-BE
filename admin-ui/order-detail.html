@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Order Detail — El TopUp Admin</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+    nav { background: #1e293b; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #334155; }
+    nav .brand { font-size: 18px; font-weight: 700; color: #60a5fa; }
+    nav .links { display: flex; gap: 16px; }
+    nav a { color: #94a3b8; text-decoration: none; font-size: 14px; }
+    nav a:hover { color: #60a5fa; }
+    .container { max-width: 900px; margin: 0 auto; padding: 24px; }
+    h1 { font-size: 22px; margin-bottom: 20px; }
+    h2 { font-size: 17px; margin: 24px 0 12px; color: #94a3b8; }
+    .card { background: #1e293b; border-radius: 12px; padding: 20px; border: 1px solid #334155; margin-bottom: 16px; }
+    .field { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #334155; }
+    .field:last-child { border-bottom: none; }
+    .field .label { color: #94a3b8; font-size: 13px; }
+    .field .val { font-size: 14px; font-weight: 500; }
+    .badge { display: inline-block; padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+    .badge-paid { background: #166534; color: #4ade80; }
+    .badge-unpaid { background: #713f12; color: #fbbf24; }
+    .badge-failed { background: #7f1d1d; color: #f87171; }
+    .badge-completed { background: #166534; color: #4ade80; }
+    .badge-pending { background: #713f12; color: #fbbf24; }
+    .badge-processing { background: #1e3a5f; color: #60a5fa; }
+    .actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 16px; }
+    button { padding: 10px 20px; border-radius: 8px; border: none; cursor: pointer; font-size: 14px; font-weight: 600; }
+    .btn-primary { background: #2563eb; color: white; }
+    .btn-primary:hover { background: #1d4ed8; }
+    .btn-danger { background: #dc2626; color: white; }
+    .btn-danger:hover { background: #b91c1c; }
+    .btn-success { background: #16a34a; color: white; }
+    .btn-success:hover { background: #15803d; }
+    .form-group { margin-bottom: 12px; }
+    .form-group label { display: block; font-size: 13px; color: #94a3b8; margin-bottom: 4px; }
+    .form-group input, .form-group select, .form-group textarea { width: 100%; background: #0f172a; border: 1px solid #334155; color: #e2e8f0; padding: 10px 12px; border-radius: 8px; font-size: 14px; }
+    .form-group textarea { min-height: 80px; resize: vertical; }
+    .note-item { padding: 12px; border-bottom: 1px solid #334155; }
+    .note-item:last-child { border-bottom: none; }
+    .note-meta { font-size: 12px; color: #64748b; margin-bottom: 4px; }
+    .note-text { font-size: 14px; }
+    .hidden { display: none; }
+    #logout-btn { background: none; border: 1px solid #475569; color: #94a3b8; padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: 13px; }
+    .back-link { color: #60a5fa; text-decoration: none; font-size: 14px; display: inline-block; margin-bottom: 16px; }
+    .msg { padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; font-size: 14px; }
+    .msg-success { background: #166534; color: #4ade80; }
+    .msg-error { background: #7f1d1d; color: #f87171; }
+  </style>
+</head>
+<body>
+  <nav>
+    <span class="brand">El TopUp Admin</span>
+    <div class="links">
+      <a href="/admin-ui/dashboard.html">Dashboard</a>
+      <a href="/admin-ui/orders.html">Orders</a>
+      <a href="/admin-ui/settings.html">Settings</a>
+    </div>
+    <button id="logout-btn" onclick="logout()">Logout</button>
+  </nav>
+  <div class="container">
+    <a href="/admin-ui/orders.html" class="back-link">&larr; Kembali ke Orders</a>
+    <div id="msg-area"></div>
+    <h1>Detail Order <span id="order-short-id"></span></h1>
+
+    <div class="card" id="order-info">
+      <p style="text-align:center;color:#94a3b8;">Memuat...</p>
+    </div>
+
+    <!-- ROBUX: Bot Actions -->
+    <div id="robux-section" class="hidden">
+      <h2>Bot Status</h2>
+      <div class="card">
+        <div class="field"><span class="label">Bot Status</span><span class="val" id="bot-status-val">-</span></div>
+        <div class="field"><span class="label">Error Message</span><span class="val" id="bot-error-val">-</span></div>
+        <div class="actions" id="bot-actions"></div>
+      </div>
+    </div>
+
+    <!-- ITEM_GAME: Admin Actions -->
+    <div id="item-section" class="hidden">
+      <h2>Admin Status</h2>
+      <div class="card">
+        <div class="field"><span class="label">Admin Status</span><span class="val" id="admin-status-val">-</span></div>
+        <div id="item-actions-area">
+          <div class="form-group">
+            <label>Update Status</label>
+            <select id="new-admin-status">
+              <option value="">-- Pilih --</option>
+              <option value="PENDING_ADMIN">PENDING_ADMIN</option>
+              <option value="SCHEDULED">SCHEDULED</option>
+              <option value="DELIVERED">DELIVERED</option>
+              <option value="CANCELLED">CANCELLED (Approve Cancel)</option>
+            </select>
+          </div>
+          <div id="meetup-fields" class="hidden">
+            <div class="form-group"><label>World Name</label><input type="text" id="meetup-world" placeholder="e.g. Fish It Main World"></div>
+            <div class="form-group"><label>Server Code (opsional)</label><input type="text" id="meetup-server-code"></div>
+            <div class="form-group"><label>Jadwal Meetup</label><input type="datetime-local" id="meetup-datetime"></div>
+          </div>
+          <div class="actions">
+            <button class="btn-primary" onclick="updateAdminStatus()">Update Status</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Admin Notes -->
+    <h2>Catatan Admin</h2>
+    <div class="card">
+      <div id="notes-list"><p style="color:#94a3b8;font-size:14px;">Belum ada catatan.</p></div>
+      <hr style="border-color:#334155;margin:16px 0;">
+      <div class="form-group"><label>Tambah Catatan</label><textarea id="new-note" placeholder="Tulis catatan..."></textarea></div>
+      <button class="btn-primary" onclick="addNote()">Tambah Catatan</button>
+    </div>
+
+    <!-- Event Logs -->
+    <h2>Event Logs</h2>
+    <div class="card" id="event-logs"><p style="color:#94a3b8;font-size:14px;">Memuat...</p></div>
+  </div>
+  <script>
+    var API_BASE = window.location.origin;
+    var adminToken = localStorage.getItem('adminToken');
+    if (!adminToken) window.location.href = '/admin-ui/login.html';
+
+    var params = new URLSearchParams(window.location.search);
+    var orderId = params.get('id');
+    if (!orderId) { alert('Order ID tidak ditemukan.'); window.location.href = '/admin-ui/orders.html'; }
+
+    var orderData = null;
+
+    function headers() { return { 'Authorization': 'Bearer ' + adminToken, 'Content-Type': 'application/json' }; }
+    function logout() { localStorage.removeItem('adminToken'); window.location.href = '/admin-ui/login.html'; }
+    function formatIdr(n) { return 'Rp' + (n || 0).toLocaleString('id-ID'); }
+    function formatDate(d) { if (!d) return '-'; return new Date(d).toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }); }
+    function shortId(id) { return id ? id.substring(0, 8).toUpperCase() : '-'; }
+
+    function showMsg(text, type) {
+      var area = document.getElementById('msg-area');
+      area.innerHTML = '<div class="msg msg-' + type + '">' + text + '</div>';
+      setTimeout(function() { area.innerHTML = ''; }, 5000);
+    }
+
+    function badgeHtml(val) {
+      if (!val) return '-';
+      var cls = 'badge-failed';
+      if (val === 'PAID' || val === 'COMPLETED' || val === 'DELIVERED') cls = 'badge-completed';
+      else if (val === 'UNPAID' || val === 'PENDING' || val === 'PENDING_ADMIN') cls = 'badge-pending';
+      else if (val === 'PROCESSING' || val === 'SCHEDULED') cls = 'badge-processing';
+      return '<span class="badge ' + cls + '">' + val + '</span>';
+    }
+
+    async function loadOrder() {
+      try {
+        var res = await fetch(API_BASE + '/api/admin/orders/' + orderId, { headers: headers() });
+        if (res.status === 403 || res.status === 401) { alert('Akses ditolak.'); logout(); return; }
+        orderData = await res.json();
+        var o = orderData;
+        document.getElementById('order-short-id').textContent = shortId(o.id);
+
+        var infoHtml =
+          '<div class="field"><span class="label">Order ID</span><span class="val">' + o.id + '</span></div>' +
+          '<div class="field"><span class="label">Type</span><span class="val">' + o.orderType + '</span></div>' +
+          '<div class="field"><span class="label">User</span><span class="val">' + (o.user ? (o.user.name || o.user.email) : '-') + '</span></div>' +
+          '<div class="field"><span class="label">Roblox Username</span><span class="val">' + (o.robloxUsername || '-') + '</span></div>' +
+          '<div class="field"><span class="label">Payment Status</span><span class="val">' + badgeHtml(o.paymentStatus) + '</span></div>' +
+          '<div class="field"><span class="label">Harga</span><span class="val">' + formatIdr(o.customerPriceIdr) + '</span></div>' +
+          '<div class="field"><span class="label">Quantity</span><span class="val">' + (o.quantity || 1) + '</span></div>';
+
+        if (o.robuxAmount) infoHtml += '<div class="field"><span class="label">Robux Amount</span><span class="val">' + o.robuxAmount + '</span></div>';
+        if (o.robloxGamepassId) infoHtml += '<div class="field"><span class="label">Gamepass ID</span><span class="val">' + o.robloxGamepassId + '</span></div>';
+        if (o.product) infoHtml += '<div class="field"><span class="label">Product</span><span class="val">' + o.product.name + (o.product.game ? ' (' + o.product.game.name + ')' : '') + '</span></div>';
+        if (o.customerWhatsapp) infoHtml += '<div class="field"><span class="label">WhatsApp</span><span class="val">' + o.customerWhatsapp + '</span></div>';
+        if (o.cancelReason) infoHtml += '<div class="field"><span class="label">Alasan Cancel</span><span class="val">' + o.cancelReason + '</span></div>';
+        if (o.meetupWorld) infoHtml += '<div class="field"><span class="label">Meetup World</span><span class="val">' + o.meetupWorld + '</span></div>';
+        if (o.meetupScheduledAt) infoHtml += '<div class="field"><span class="label">Meetup Jadwal</span><span class="val">' + formatDate(o.meetupScheduledAt) + '</span></div>';
+
+        infoHtml += '<div class="field"><span class="label">Dibuat</span><span class="val">' + formatDate(o.createdAt) + '</span></div>';
+        document.getElementById('order-info').innerHTML = infoHtml;
+
+        if (o.orderType === 'ROBUX') {
+          document.getElementById('robux-section').classList.remove('hidden');
+          document.getElementById('bot-status-val').innerHTML = badgeHtml(o.botStatus);
+          document.getElementById('bot-error-val').textContent = o.botErrorMessage || '-';
+          var botActions = document.getElementById('bot-actions');
+          if (o.botStatus === 'FAILED' || o.botStatus === 'ERROR') {
+            botActions.innerHTML = '<button class="btn-primary" onclick="retryBot()">Retry Bot Purchase</button>';
+          } else {
+            botActions.innerHTML = '';
+          }
+        }
+
+        if (o.orderType === 'ITEM_GAME') {
+          document.getElementById('item-section').classList.remove('hidden');
+          document.getElementById('admin-status-val').innerHTML = badgeHtml(o.adminStatus);
+        }
+
+        // Notes
+        var notesList = document.getElementById('notes-list');
+        if (o.adminNotes && o.adminNotes.length > 0) {
+          notesList.innerHTML = o.adminNotes.map(function(n) {
+            return '<div class="note-item"><div class="note-meta">' + (n.admin ? n.admin.name || n.admin.email : 'Admin') + ' — ' + formatDate(n.createdAt) + '</div><div class="note-text">' + n.note + '</div></div>';
+          }).join('');
+        }
+
+        // Event Logs
+        var logsEl = document.getElementById('event-logs');
+        if (o.eventLogs && o.eventLogs.length > 0) {
+          logsEl.innerHTML = o.eventLogs.map(function(l) {
+            return '<div class="note-item"><div class="note-meta">[' + l.serviceName + '] ' + l.eventType + ' — ' + l.status + ' — ' + formatDate(l.createdAt) + '</div><div class="note-text" style="font-size:12px;color:#64748b;word-break:break-all;">' + JSON.stringify(l.payloadData) + '</div></div>';
+          }).join('');
+        } else {
+          logsEl.innerHTML = '<p style="color:#94a3b8;font-size:14px;">Belum ada log.</p>';
+        }
+      } catch (err) {
+        console.error('Load order error:', err);
+      }
+    }
+
+    document.getElementById('new-admin-status').addEventListener('change', function() {
+      var meetupFields = document.getElementById('meetup-fields');
+      meetupFields.classList.toggle('hidden', this.value !== 'SCHEDULED');
+    });
+
+    async function updateAdminStatus() {
+      var newStatus = document.getElementById('new-admin-status').value;
+      if (!newStatus) { alert('Pilih status baru.'); return; }
+      var body = { adminStatus: newStatus };
+      if (newStatus === 'SCHEDULED') {
+        body.meetupWorld = document.getElementById('meetup-world').value;
+        body.meetupScheduledAt = document.getElementById('meetup-datetime').value;
+        body.meetupServerCode = document.getElementById('meetup-server-code').value || undefined;
+        if (!body.meetupWorld || !body.meetupScheduledAt) { alert('World name dan jadwal wajib diisi.'); return; }
+      }
+      try {
+        var res = await fetch(API_BASE + '/api/admin/orders/' + orderId + '/status', { method: 'PATCH', headers: headers(), body: JSON.stringify(body) });
+        var data = await res.json();
+        if (res.ok) { showMsg('Status berhasil diperbarui.', 'success'); loadOrder(); }
+        else { showMsg(data.error || 'Gagal update.', 'error'); }
+      } catch (err) { showMsg('Error: ' + err.message, 'error'); }
+    }
+
+    async function retryBot() {
+      try {
+        var res = await fetch(API_BASE + '/api/admin/orders/' + orderId + '/status', { method: 'PATCH', headers: headers(), body: JSON.stringify({ botStatus: 'PROCESSING' }) });
+        var data = await res.json();
+        if (res.ok) { showMsg('Bot purchase dimulai ulang.', 'success'); loadOrder(); }
+        else { showMsg(data.error || 'Gagal retry.', 'error'); }
+      } catch (err) { showMsg('Error: ' + err.message, 'error'); }
+    }
+
+    async function addNote() {
+      var note = document.getElementById('new-note').value.trim();
+      if (!note) { alert('Catatan tidak boleh kosong.'); return; }
+      try {
+        var res = await fetch(API_BASE + '/api/admin/orders/' + orderId + '/status', { method: 'PATCH', headers: headers(), body: JSON.stringify({ adminNote: note }) });
+        if (res.ok) { showMsg('Catatan ditambahkan.', 'success'); document.getElementById('new-note').value = ''; loadOrder(); }
+        else { var data = await res.json(); showMsg(data.error || 'Gagal.', 'error'); }
+      } catch (err) { showMsg('Error: ' + err.message, 'error'); }
+    }
+
+    loadOrder();
+  </script>
+</body>
+</html>

@@ -6,7 +6,7 @@
 //
 // [1] Dua jenis order: ROBUX dan ITEM_GAME
 //
-// [2] ROBUX → RobuxShip otomatis, tidak bisa cancel setelah PAID
+// [2] ROBUX → Bot cookie internal otomatis, tidak bisa cancel setelah PAID
 //
 // [3] ITEM_GAME → admin deliver manual via MEETUP di Roblox.
 //     Ini berlaku untuk SEMUA jenis item termasuk Game Pass.
@@ -54,9 +54,18 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  passwordHash        String?
+  emailVerified       Boolean   @default(false)
+  emailVerifyToken    String?
+  emailVerifyExpiry   DateTime?
+  passwordResetToken  String?
+  passwordResetExpiry DateTime?
+  authProvider        String    @default("google")
+  // Valid: "google" | "email"
+
   orders     Order[]
   reviews    Review[]
-  adminNotes AdminOrderNote[] // BARU
+  adminNotes AdminOrderNote[]
 }
 
 // ───────────────────────────────────────────────────────────────────
@@ -177,13 +186,13 @@ model Product {
 //
 // Dibedakan oleh field orderType:
 //
-//   "ROBUX"     → field aktif: robuxAmount, robloxGamepassId, robuxshipStatus
+//   "ROBUX"     → field aktif: robuxAmount, robloxGamepassId, botStatus
 //                 field null : productId, quantity(=1), adminStatus
 //                 Cancel     : hanya boleh jika paymentStatus = "UNPAID"
-//                 Setelah PAID: tidak bisa cancel, RobuxShip proses instan
+//                 Setelah PAID: tidak bisa cancel, bot proses instan
 //
 //   "ITEM_GAME" → field aktif: productId, quantity, customerWhatsapp, adminStatus
-//                 field null : robuxAmount, robuxshipStatus (tidak dipakai)
+//                 field null : robuxAmount, botStatus (tidak dipakai)
 //                 Berlaku untuk SEMUA jenis item: biasa, Game Pass, Crates, dll.
 //                 Semuanya di-deliver via MEETUP oleh admin.
 //                 Cancel UNPAID: langsung cancelled
@@ -213,18 +222,17 @@ model Order {
   customerPriceIdr Int
   // Total harga yang dibayar = priceIdr × quantity
 
-  // ── Field existing ROBUX — TIDAK BERUBAH ──────────────────────
+  // ── Field ROBUX ────────────────────────────────────────────────
   robuxAmount      Int?
   robloxGamepassId String?
   paymentStatus    String   @default("UNPAID")
   // Valid: "UNPAID" | "PAID" | "CANCELLED" | "EXPIRED" | "FAILED"
-  robuxshipStatus  String   @default("PENDING")
-  // Valid: "PENDING"|"PROCESSING"|"COMPLETED"|"FAILED"|"CANCELLED"|"ERROR"
+  botStatus        String   @default("PENDING")
+  // Valid: "PENDING"|"PROCESSING"|"COMPLETED"|"FAILED"|"ERROR"
   // Hanya relevan untuk orderType = "ROBUX"
+  botErrorMessage  String?
   midtransOrderId  String?  @unique
-  robuxshipOrderId String?  @unique
   midtransFeeIdr   Int?
-  robuxshipCostUsd Decimal? @db.Decimal(10, 2)
 
   // ── Field BARU ─────────────────────────────────────────────────
 

@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Orders — El TopUp Admin</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+    nav { background: #1e293b; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #334155; }
+    nav .brand { font-size: 18px; font-weight: 700; color: #60a5fa; }
+    nav .links { display: flex; gap: 16px; }
+    nav a { color: #94a3b8; text-decoration: none; font-size: 14px; }
+    nav a:hover, nav a.active { color: #60a5fa; }
+    .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+    h1 { font-size: 24px; margin-bottom: 16px; }
+    .filters { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+    select { background: #1e293b; border: 1px solid #334155; color: #e2e8f0; padding: 8px 12px; border-radius: 8px; font-size: 14px; }
+    table { width: 100%; border-collapse: collapse; background: #1e293b; border-radius: 12px; overflow: hidden; }
+    th { background: #334155; padding: 12px 16px; text-align: left; font-size: 13px; color: #94a3b8; font-weight: 600; }
+    td { padding: 12px 16px; border-top: 1px solid #334155; font-size: 14px; }
+    tr:hover td { background: #1e3a5f; }
+    .badge { display: inline-block; padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+    .badge-paid { background: #166534; color: #4ade80; }
+    .badge-unpaid { background: #713f12; color: #fbbf24; }
+    .badge-failed { background: #7f1d1d; color: #f87171; }
+    .badge-robux { background: #1e3a5f; color: #60a5fa; }
+    .badge-item { background: #365314; color: #a3e635; }
+    .badge-pending { background: #713f12; color: #fbbf24; }
+    .badge-completed { background: #166534; color: #4ade80; }
+    .badge-processing { background: #1e3a5f; color: #60a5fa; }
+    .clickable { cursor: pointer; }
+    .pagination { display: flex; gap: 8px; margin-top: 16px; justify-content: center; }
+    .pagination button { background: #1e293b; border: 1px solid #334155; color: #e2e8f0; padding: 8px 16px; border-radius: 8px; cursor: pointer; }
+    .pagination button:hover { border-color: #60a5fa; }
+    .pagination button:disabled { opacity: 0.4; cursor: default; }
+    #logout-btn { background: none; border: 1px solid #475569; color: #94a3b8; padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: 13px; }
+    #logout-btn:hover { border-color: #f87171; color: #f87171; }
+  </style>
+</head>
+<body>
+  <nav>
+    <span class="brand">El TopUp Admin</span>
+    <div class="links">
+      <a href="/admin-ui/dashboard.html">Dashboard</a>
+      <a href="/admin-ui/orders.html" class="active">Orders</a>
+      <a href="/admin-ui/settings.html">Settings</a>
+    </div>
+    <button id="logout-btn" onclick="logout()">Logout</button>
+  </nav>
+  <div class="container">
+    <h1>Semua Order</h1>
+    <div class="filters">
+      <select id="f-orderType"><option value="">Semua Type</option><option value="ROBUX">ROBUX</option><option value="ITEM_GAME">ITEM_GAME</option></select>
+      <select id="f-paymentStatus"><option value="">Semua Payment</option><option value="UNPAID">UNPAID</option><option value="PAID">PAID</option><option value="CANCELLED">CANCELLED</option><option value="EXPIRED">EXPIRED</option><option value="FAILED">FAILED</option></select>
+      <select id="f-adminStatus"><option value="">Semua Admin Status</option><option value="PENDING_ADMIN">PENDING_ADMIN</option><option value="SCHEDULED">SCHEDULED</option><option value="DELIVERED">DELIVERED</option><option value="CANCEL_REQUESTED">CANCEL_REQUESTED</option><option value="CANCELLED">CANCELLED</option></select>
+      <select id="f-botStatus"><option value="">Semua Bot Status</option><option value="PENDING">PENDING</option><option value="PROCESSING">PROCESSING</option><option value="COMPLETED">COMPLETED</option><option value="FAILED">FAILED</option><option value="ERROR">ERROR</option></select>
+    </div>
+    <table>
+      <thead><tr><th>ID</th><th>Type</th><th>User</th><th>Username Roblox</th><th>Payment</th><th>Admin/Bot</th><th>Harga</th><th>Tanggal</th></tr></thead>
+      <tbody id="orders-body"><tr><td colspan="8" style="text-align:center;">Memuat...</td></tr></tbody>
+    </table>
+    <div class="pagination">
+      <button id="btn-prev" onclick="changePage(-1)">Prev</button>
+      <span id="page-info" style="padding:8px 16px;color:#94a3b8;"></span>
+      <button id="btn-next" onclick="changePage(1)">Next</button>
+    </div>
+  </div>
+  <script>
+    const API_BASE = window.location.origin;
+    const adminToken = localStorage.getItem('adminToken');
+    if (!adminToken) window.location.href = '/admin-ui/login.html';
+
+    function headers() { return { 'Authorization': 'Bearer ' + adminToken }; }
+    function logout() { localStorage.removeItem('adminToken'); window.location.href = '/admin-ui/login.html'; }
+    function formatIdr(n) { return 'Rp' + (n || 0).toLocaleString('id-ID'); }
+    function shortId(id) { return id ? id.substring(0, 8).toUpperCase() : '-'; }
+    function formatDate(d) { return new Date(d).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }); }
+
+    let currentPage = 1;
+    let totalPages = 1;
+
+    function statusBadge(val, type) {
+      if (!val) return '-';
+      var cls = 'badge-failed';
+      if (val === 'PAID' || val === 'COMPLETED' || val === 'DELIVERED') cls = 'badge-completed';
+      else if (val === 'UNPAID' || val === 'PENDING' || val === 'PENDING_ADMIN') cls = 'badge-pending';
+      else if (val === 'PROCESSING' || val === 'SCHEDULED') cls = 'badge-processing';
+      return '<span class="badge ' + cls + '">' + val + '</span>';
+    }
+
+    async function loadOrders() {
+      var params = new URLSearchParams();
+      params.set('page', currentPage);
+      params.set('limit', '20');
+      var ot = document.getElementById('f-orderType').value; if (ot) params.set('orderType', ot);
+      var ps = document.getElementById('f-paymentStatus').value; if (ps) params.set('paymentStatus', ps);
+      var as2 = document.getElementById('f-adminStatus').value; if (as2) params.set('adminStatus', as2);
+      var bs = document.getElementById('f-botStatus').value; if (bs) params.set('botStatus', bs);
+
+      try {
+        var res = await fetch(API_BASE + '/api/admin/orders?' + params.toString(), { headers: headers() });
+        if (res.status === 403 || res.status === 401) { logout(); return; }
+        var data = await res.json();
+        totalPages = data.totalPages || 1;
+        document.getElementById('page-info').textContent = 'Hal ' + data.page + ' / ' + totalPages;
+        document.getElementById('btn-prev').disabled = currentPage <= 1;
+        document.getElementById('btn-next').disabled = currentPage >= totalPages;
+
+        var tbody = document.getElementById('orders-body');
+        if (!data.orders || data.orders.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;">Tidak ada order.</td></tr>';
+          return;
+        }
+        tbody.innerHTML = data.orders.map(function(o) {
+          var typeBadge = o.orderType === 'ROBUX' ? '<span class="badge badge-robux">ROBUX</span>' : '<span class="badge badge-item">ITEM</span>';
+          var statusCol = o.orderType === 'ROBUX' ? statusBadge(o.botStatus) : statusBadge(o.adminStatus);
+          return '<tr class="clickable" onclick="window.location.href=\'/admin-ui/order-detail.html?id=' + o.id + '\'">' +
+            '<td>' + shortId(o.id) + '</td>' +
+            '<td>' + typeBadge + '</td>' +
+            '<td>' + (o.user ? (o.user.name || o.user.email) : '-') + '</td>' +
+            '<td>' + (o.robloxUsername || '-') + '</td>' +
+            '<td>' + statusBadge(o.paymentStatus) + '</td>' +
+            '<td>' + statusCol + '</td>' +
+            '<td>' + formatIdr(o.customerPriceIdr) + '</td>' +
+            '<td>' + formatDate(o.createdAt) + '</td></tr>';
+        }).join('');
+      } catch (err) {
+        console.error('Load orders error:', err);
+      }
+    }
+
+    function changePage(delta) {
+      currentPage = Math.max(1, Math.min(totalPages, currentPage + delta));
+      loadOrders();
+    }
+
+    document.querySelectorAll('.filters select').forEach(function(el) {
+      el.addEventListener('change', function() { currentPage = 1; loadOrders(); });
+    });
+
+    loadOrders();
+  </script>
+</body>
+</html>

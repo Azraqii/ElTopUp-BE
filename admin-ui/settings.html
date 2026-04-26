@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Settings — El TopUp Admin</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+    nav { background: #1e293b; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #334155; }
+    nav .brand { font-size: 18px; font-weight: 700; color: #60a5fa; }
+    nav .links { display: flex; gap: 16px; }
+    nav a { color: #94a3b8; text-decoration: none; font-size: 14px; }
+    nav a:hover, nav a.active { color: #60a5fa; }
+    .container { max-width: 600px; margin: 0 auto; padding: 24px; }
+    h1 { font-size: 24px; margin-bottom: 24px; }
+    .card { background: #1e293b; border-radius: 12px; padding: 24px; border: 1px solid #334155; }
+    .field { display: flex; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid #334155; }
+    .field .label { color: #94a3b8; font-size: 14px; }
+    .field .val { font-size: 14px; font-weight: 600; }
+    .status-ok { color: #4ade80; }
+    .status-no { color: #f87171; }
+    .form-group { margin-top: 20px; }
+    .form-group label { display: block; font-size: 13px; color: #94a3b8; margin-bottom: 6px; }
+    .form-group input { width: 100%; background: #0f172a; border: 1px solid #334155; color: #e2e8f0; padding: 12px; border-radius: 8px; font-size: 14px; font-family: monospace; }
+    button { padding: 12px 24px; border-radius: 8px; border: none; cursor: pointer; font-size: 14px; font-weight: 600; margin-top: 16px; }
+    .btn-primary { background: #2563eb; color: white; }
+    .btn-primary:hover { background: #1d4ed8; }
+    .msg { padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; font-size: 14px; }
+    .msg-success { background: #166534; color: #4ade80; }
+    .msg-error { background: #7f1d1d; color: #f87171; }
+    #logout-btn { background: none; border: 1px solid #475569; color: #94a3b8; padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: 13px; }
+    #logout-btn:hover { border-color: #f87171; color: #f87171; }
+  </style>
+</head>
+<body>
+  <nav>
+    <span class="brand">El TopUp Admin</span>
+    <div class="links">
+      <a href="/admin-ui/dashboard.html">Dashboard</a>
+      <a href="/admin-ui/orders.html">Orders</a>
+      <a href="/admin-ui/settings.html" class="active">Settings</a>
+    </div>
+    <button id="logout-btn" onclick="logout()">Logout</button>
+  </nav>
+  <div class="container">
+    <h1>Settings</h1>
+    <div id="msg-area"></div>
+    <div class="card">
+      <h2 style="font-size:17px;margin-bottom:12px;">Bot Cookie (.ROBLOSECURITY)</h2>
+      <div class="field">
+        <span class="label">Status Cookie</span>
+        <span class="val" id="cookie-status">Memuat...</span>
+      </div>
+      <div class="form-group">
+        <label>Cookie Baru</label>
+        <input type="password" id="cookie-input" placeholder="Paste cookie .ROBLOSECURITY di sini...">
+      </div>
+      <button class="btn-primary" onclick="updateCookie()">Update Cookie</button>
+    </div>
+  </div>
+  <script>
+    var API_BASE = window.location.origin;
+    var adminToken = localStorage.getItem('adminToken');
+    if (!adminToken) window.location.href = '/admin-ui/login.html';
+
+    function headers() { return { 'Authorization': 'Bearer ' + adminToken, 'Content-Type': 'application/json' }; }
+    function logout() { localStorage.removeItem('adminToken'); window.location.href = '/admin-ui/login.html'; }
+
+    function showMsg(text, type) {
+      var area = document.getElementById('msg-area');
+      area.innerHTML = '<div class="msg msg-' + type + '">' + text + '</div>';
+      setTimeout(function() { area.innerHTML = ''; }, 5000);
+    }
+
+    async function loadStatus() {
+      try {
+        var res = await fetch(API_BASE + '/api/admin/settings/bot-cookie', { headers: headers() });
+        if (res.status === 403 || res.status === 401) { alert('Akses ditolak.'); logout(); return; }
+        var data = await res.json();
+        var el = document.getElementById('cookie-status');
+        if (data.hasValue) {
+          el.innerHTML = '<span class="status-ok">Sudah dikonfigurasi</span>';
+        } else {
+          el.innerHTML = '<span class="status-no">Belum diisi</span>';
+        }
+      } catch (err) {
+        console.error('Load status error:', err);
+      }
+    }
+
+    async function updateCookie() {
+      var cookie = document.getElementById('cookie-input').value.trim();
+      if (!cookie) { alert('Cookie tidak boleh kosong.'); return; }
+      if (cookie.length < 50) { alert('Cookie terlalu pendek (minimal 50 karakter).'); return; }
+
+      try {
+        var res = await fetch(API_BASE + '/api/admin/settings/bot-cookie', {
+          method: 'PUT',
+          headers: headers(),
+          body: JSON.stringify({ cookie: cookie }),
+        });
+        var data = await res.json();
+        if (res.ok) {
+          showMsg(data.message || 'Cookie berhasil diperbarui.', 'success');
+          document.getElementById('cookie-input').value = '';
+          loadStatus();
+        } else {
+          showMsg(data.error || 'Gagal update cookie.', 'error');
+        }
+      } catch (err) {
+        showMsg('Error: ' + err.message, 'error');
+      }
+    }
+
+    loadStatus();
+  </script>
+</body>
+</html>

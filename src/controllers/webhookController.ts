@@ -1,17 +1,91 @@
 import { Request, Response } from 'express';
 import crypto from 'crypto';
 import { prisma } from '../lib/prisma';
-import { createRobuxshipOrder } from '../services/robuxshipService';
+import { purchaseGamepass } from '../services/robloxBotService';
 
 const MIDTRANS_SERVER_KEY = process.env.MIDTRANS_SERVER_KEY as string;
 const MIDTRANS_IS_PRODUCTION = String(process.env.MIDTRANS_IS_PRODUCTION || 'false').toLowerCase() === 'true';
-const ROBUXSHIP_AUTO_FULFILLMENT = (() => {
-  const override = process.env.ROBUXSHIP_AUTO_FULFILLMENT;
-  if (override === undefined || override === '') {
-    return MIDTRANS_IS_PRODUCTION;
+
+async function processBotPurchase(orderId: string): Promise<void> {
+  const order = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+
+  if (!order.robloxGamepassId || order.robuxAmount === null) {
+    throw new Error(`Order ${orderId} tidak memiliki gamepassId atau robuxAmount.`);
   }
-  return String(override).toLowerCase() === 'true';
-})();
+
+  console.log(`🤖 BOT: Memulai pembelian gamepass ${order.robloxGamepassId} untuk order ${orderId}...`);
+
+  await prisma.order.update({
+    where: { id: orderId },
+    data: { botStatus: 'PROCESSING' },
+  });
+
+  try {
+    const grossAmount = Math.ceil(order.robuxAmount / 0.7);
+    const result = await purchaseGamepass(order.robloxGamepassId, grossAmount);
+
+    if (result.success) {
+      await prisma.order.update({
+        where: { id: orderId },
+        data: { botStatus: 'COMPLETED' },
+      });
+
+      await prisma.systemLog.create({
+        data: {
+          orderId,
+          serviceName: 'BOT',
+          eventType: 'PURCHASE_SUCCESS',
+          payloadData: { gamepassId: order.robloxGamepassId, ...JSON.parse(JSON.stringify(result)) },
+          status: 'SUCCESS',
+        },
+      });
+
+      console.log(`✅ BOT: Pembelian berhasil untuk order ${orderId}`);
+    } else {
+      await prisma.order.update({
+        where: { id: orderId },
+        data: {
+          botStatus: 'FAILED',
+          botErrorMessage: result.message || 'Pembelian gagal tanpa pesan error.',
+        },
+      });
+
+      await prisma.systemLog.create({
+        data: {
+          orderId,
+          serviceName: 'BOT',
+          eventType: 'PURCHASE_FAILED',
+          payloadData: { gamepassId: order.robloxGamepassId, ...JSON.parse(JSON.stringify(result)) },
+          status: 'ERROR',
+        },
+      });
+
+      console.error(`❌ BOT: Pembelian gagal untuk order ${orderId}: ${result.message}`);
+    }
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+
+    await prisma.order.update({
+      where: { id: orderId },
+      data: {
+        botStatus: 'FAILED',
+        botErrorMessage: errorMessage,
+      },
+    });
+
+    await prisma.systemLog.create({
+      data: {
+        orderId,
+        serviceName: 'BOT',
+        eventType: 'PURCHASE_ERROR',
+        payloadData: { gamepassId: order.robloxGamepassId, error: errorMessage },
+        status: 'ERROR',
+      },
+    });
+
+    console.error(`❌ BOT: Error saat pembelian order ${orderId}:`, errorMessage);
+  }
+}
 
 // ------------------------------------------------------------------
 // POST /api/webhooks/midtrans
@@ -20,11 +94,7 @@ export const midtransWebhook = async (req: Request, res: Response): Promise<void
   try {
     const payload = req.body;
 
-    // 1. Validasi Signature Key
-    // Di sandbox, Midtrans "Test notification" mengirim payload dummy tanpa
-    // signature_key yang valid — kita skip validasi di sandbox agar bisa test.
     if (MIDTRANS_IS_PRODUCTION) {
-      // Production: wajib validasi signature
       const hashSignature = crypto
         .createHash('sha512')
         .update(`${payload.order_id}${payload.status_code}${payload.gross_amount}${MIDTRANS_SERVER_KEY}`)
@@ -36,8 +106,6 @@ export const midtransWebhook = async (req: Request, res: Response): Promise<void
         return;
       }
     } else {
-      // Sandbox: tetap validasi kalau signature_key ada di payload
-      // (transaksi real di sandbox punya signature, test notification tidak)
       if (payload.signature_key) {
         const hashSignature = crypto
           .createHash('sha512')
@@ -45,11 +113,10 @@ export const midtransWebhook = async (req: Request, res: Response): Promise<void
           .digest('hex');
 
         if (hashSignature !== payload.signature_key) {
-          console.warn('[Webhook Midtrans] Sandbox: signature tidak cocok, tapi tetap diproses untuk debugging.');
-          // Di sandbox kita log warning tapi tetap lanjut proses
+          console.warn('[Webhook Midtrans] Sandbox: signature tidak cocok, tapi tetap diproses.');
         }
       } else {
-        console.log('[Webhook Midtrans] Sandbox: test notification tanpa signature, dilewati.');
+        console.log('[Webhook Midtrans] Sandbox: test notification tanpa signature.');
       }
     }
 
@@ -64,7 +131,6 @@ export const midtransWebhook = async (req: Request, res: Response): Promise<void
 
     console.log(`[Webhook Midtrans] Received: order=${externalOrderId} status=${transactionStatus}`);
 
-    // 2. Ambil data order dari database
     const order = await prisma.order.findFirst({
       where: {
         OR: [{ midtransOrderId: externalOrderId }, { id: externalOrderId }],
@@ -79,7 +145,6 @@ export const midtransWebhook = async (req: Request, res: Response): Promise<void
 
     const orderId = order.id;
 
-    // 3. Proses berdasarkan status pembayaran
     if (transactionStatus === 'capture' || transactionStatus === 'settlement') {
       if (fraudStatus === 'challenge') {
         console.warn(`[Webhook Midtrans] Order ${orderId} flagged as challenge — skip.`);
@@ -87,39 +152,50 @@ export const midtransWebhook = async (req: Request, res: Response): Promise<void
         return;
       }
 
-      if (order.paymentStatus === 'UNPAID' || order.paymentStatus === 'FAILED') {
+      if (order.paymentStatus !== 'UNPAID' && order.paymentStatus !== 'FAILED') {
+        console.log(`[Webhook Midtrans] Order ${orderId} sudah berstatus ${order.paymentStatus}, skip.`);
+        res.status(200).json({ status: 'already processed' });
+        return;
+      }
+
+      await prisma.order.update({
+        where: { id: orderId },
+        data: { paymentStatus: 'PAID' },
+      });
+
+      console.log(`[Webhook Midtrans] Order ${orderId} → PAID`);
+
+      await prisma.systemLog.create({
+        data: {
+          orderId,
+          serviceName: 'MIDTRANS',
+          eventType: 'PAYMENT_SETTLED',
+          payloadData: { transactionStatus, externalOrderId },
+          status: 'SUCCESS',
+        },
+      });
+
+      if (order.orderType === 'ROBUX') {
+        processBotPurchase(orderId).catch((err) => {
+          console.error(`[Webhook Midtrans] Background bot purchase error for ${orderId}:`, err);
+        });
+      } else if (order.orderType === 'ITEM_GAME') {
         await prisma.order.update({
           where: { id: orderId },
-          data: { paymentStatus: 'PAID' },
+          data: { adminStatus: 'PENDING_ADMIN' },
         });
 
-        console.log(`[Webhook Midtrans] Order ${orderId} → PAID`);
+        await prisma.systemLog.create({
+          data: {
+            orderId,
+            serviceName: 'SYSTEM',
+            eventType: 'ITEM_ORDER_PENDING_ADMIN',
+            payloadData: { orderType: 'ITEM_GAME' },
+            status: 'SUCCESS',
+          },
+        });
 
-        if (!ROBUXSHIP_AUTO_FULFILLMENT) {
-          await prisma.systemLog.create({
-            data: {
-              orderId,
-              serviceName: 'ROBUXSHIP',
-              eventType: 'AUTO_FULFILLMENT_SKIPPED',
-              payloadData: {
-                reason: MIDTRANS_IS_PRODUCTION ? 'disabled_by_env' : 'midtrans_sandbox_mode',
-                midtransOrderId: externalOrderId,
-                transactionStatus,
-              },
-              status: 'INFO',
-            },
-          });
-          console.log(`[Webhook Midtrans] Auto-fulfillment dilewati untuk Order ${orderId}`);
-        } else {
-          try {
-            await createRobuxshipOrder(orderId);
-            console.log(`[Webhook Midtrans] RobuxShip order created untuk Order ${orderId}`);
-          } catch (err: any) {
-            console.error(`[Webhook Midtrans] Gagal tembak RobuxShip untuk Order ${orderId}:`, err.message);
-          }
-        }
-      } else {
-        console.log(`[Webhook Midtrans] Order ${orderId} sudah berstatus ${order.paymentStatus}, skip.`);
+        console.log(`[Webhook Midtrans] Order ITEM_GAME ${orderId} → PENDING_ADMIN`);
       }
     } else if (transactionStatus === 'cancel' || transactionStatus === 'deny' || transactionStatus === 'expire') {
       const failedStatus =
@@ -139,65 +215,6 @@ export const midtransWebhook = async (req: Request, res: Response): Promise<void
     res.status(200).json({ status: 'ok' });
   } catch (error) {
     console.error('[Midtrans Webhook Error]:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-};
-
-// ------------------------------------------------------------------
-// POST /api/webhooks/robuxship
-// ------------------------------------------------------------------
-export const robuxshipWebhook = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const event = req.headers['robuxship-event'];
-    const payload = req.body;
-
-    if (!event || !payload.data) {
-      res.status(400).json({ error: 'Invalid payload' });
-      return;
-    }
-
-    const orderId = payload.data.external_order_id;
-
-    const order = await prisma.order.findUnique({ where: { id: orderId } });
-    if (!order) {
-      res.status(404).json({ error: 'Order not found' });
-      return;
-    }
-
-    console.log(`[Webhook RobuxShip] Event: ${event} | Order: ${orderId}`);
-
-    if (event === 'order.completed') {
-      await prisma.order.update({
-        where: { id: orderId },
-        data: { robuxshipStatus: 'COMPLETED' },
-      });
-      console.log(`[Webhook RobuxShip] Order ${orderId} → COMPLETED`);
-    } else if (event === 'order.failed') {
-      await prisma.order.update({
-        where: { id: orderId },
-        data: { robuxshipStatus: 'FAILED' },
-      });
-      await prisma.systemLog.create({
-        data: {
-          orderId,
-          serviceName: 'ROBUXSHIP',
-          eventType: 'WEBHOOK_ORDER_FAILED',
-          payloadData: payload,
-          status: 'ERROR',
-        },
-      });
-      console.error(`[Webhook RobuxShip] Order ${orderId} → FAILED:`, payload.data.error_message);
-    } else if (event === 'order.cancelled') {
-      await prisma.order.update({
-        where: { id: orderId },
-        data: { robuxshipStatus: 'CANCELLED' },
-      });
-      console.log(`[Webhook RobuxShip] Order ${orderId} → CANCELLED`);
-    }
-
-    res.status(200).json({ status: 'ok' });
-  } catch (error) {
-    console.error('[RobuxShip Webhook Error]:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 };
