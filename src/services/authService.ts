@@ -10,6 +10,7 @@ const ADMIN_JWT_EXPIRES_IN = process.env.ADMIN_JWT_EXPIRES_IN || '8h';
 export interface JwtPayload {
   sub: string;
   email: string;
+  name?: string;
   role: string;
   iat?: number;
   exp?: number;
@@ -27,7 +28,7 @@ export async function comparePassword(password: string, hash: string): Promise<b
   return bcrypt.compare(password, hash);
 }
 
-export function signUserJwt(payload: { sub: string; email: string; role: string }): string {
+export function signUserJwt(payload: { sub: string; email: string; name?: string; role: string }): string {
   const options: SignOptions = { expiresIn: USER_JWT_EXPIRES_IN as unknown as SignOptions['expiresIn'] };
   return jwt.sign(payload, USER_JWT_SECRET, options);
 }

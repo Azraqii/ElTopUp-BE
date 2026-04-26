@@ -47,24 +47,13 @@ export const googleCallback = (req: Request, res: Response, next: NextFunction):
       return;
     }
 
-    const token = signUserJwt({ sub: user.id, email: user.email, role: user.role });
+    const token = signUserJwt({ sub: user.id, email: user.email, name: user.name || undefined, role: user.role });
 
     res.redirect(`${FRONTEND_URL}/auth/callback?token=${token}`);
   })(req, res, next);
 };
 
-export const getMe = async (req: AuthRequest, res: Response): Promise<void> => {
-  try {
-    const user = await prisma.user.findUnique({ where: { id: req.user.sub } });
-
-    if (!user) {
-      res.status(404).json({ error: 'User not found.' });
-      return;
-    }
-
-    res.status(200).json({ id: user.id, email: user.email, name: user.name, role: user.role });
-  } catch (err) {
-    console.error('[getMe] Error:', err);
-    res.status(500).json({ error: 'Failed to fetch user profile.' });
-  }
+export const getMe = (_req: AuthRequest, res: Response): void => {
+  const { sub, email, name, role } = _req.user;
+  res.status(200).json({ id: sub, email, name, role });
 };
