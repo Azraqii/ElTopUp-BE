@@ -20,6 +20,7 @@ export interface ScanGamepassResult {
   username: string;
   requiredPrice: number;
   hint?: string;
+  source?: 'roblox-api' | 'robuxship';
 }
 
 async function lookupRobloxUserId(username: string): Promise<{ userId: number; username: string }> {
@@ -85,6 +86,11 @@ export async function findGamepassByPrice(
         }
 
         if (confirmedSellerId === robloxUser.userId) {
+          console.log(
+            `[findGamepassByPrice] ✅ Ditemukan via Roblox API (scan langsung) — gamepassId: ${gp.gamepassId}, ` +
+            `game: "${game.name}", harga: ${gp.price} Robux, user: "${robloxUser.username}" ` +
+            `(${scannedGamepasses} gamepass di-scan dari ${games.length} game)`,
+          );
           return {
             found: true,
             gamepass: {
@@ -100,6 +106,7 @@ export async function findGamepassByPrice(
             userId: robloxUser.userId,
             username: robloxUser.username,
             requiredPrice: targetPrice,
+            source: 'roblox-api',
           };
         }
       }
@@ -140,7 +147,11 @@ export async function findGamepassByPrice(
       }
 
       if (gpSellerId === robloxUser.userId && gpPrice === targetPrice && gpIsForSale) {
-        console.log(`[findGamepassByPrice] RobuxShip validate berhasil menemukan gamepass ${gamepassId}`);
+        console.log(
+          `[findGamepassByPrice] ✅ Ditemukan via RobuxShip fallback — gamepassId: ${gamepassId}, ` +
+          `harga: ${gpPrice} Robux, user: "${robloxUser.username}" ` +
+          `(Roblox API scan gagal: ${scannedGamepasses} gamepass di-scan dari ${games.length} game)`,
+        );
         return {
           found: true,
           gamepass: {
@@ -156,6 +167,7 @@ export async function findGamepassByPrice(
           userId: robloxUser.userId,
           username: robloxUser.username,
           requiredPrice: targetPrice,
+          source: 'robuxship',
         };
       }
     }
@@ -222,6 +234,12 @@ export async function validateGamepassForOrder(
       'Gamepass belum dijual (On Sale). Aktifkan penjualan gamepass di pengaturan Roblox terlebih dahulu.',
     );
   }
+
+  console.log(
+    `[validateGamepassForOrder] Validasi berhasil via ${scanResult.source === 'robuxship' ? 'RobuxShip' : 'Roblox API'} — ` +
+    `gamepassId: ${scanResult.gamepass.gamepassId}, nama: "${gpInfo.name}", ` +
+    `harga: ${gpInfo.price} Robux, user: "${scanResult.username}"`,
+  );
 
   return {
     valid: true,

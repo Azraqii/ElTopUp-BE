@@ -243,12 +243,18 @@ export async function getUserGames(userId: number): Promise<{ universeId: number
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function parseGamepassEntry(gp: any): { gamepassId: string; name: string; price: number; isForSale: boolean; sellerId: number } {
-  const price = gp.price ?? gp.PriceInRobux ?? gp.priceInRobux ?? 0;
+  const price =
+    gp.price?.robux ??
+    gp.price ??
+    gp.PriceInRobux ??
+    gp.priceInRobux ??
+    0;
+  const resolvedPrice = typeof price === 'object' ? 0 : price;
   return {
     gamepassId: String(gp.id || gp.gamePassId || gp.Id),
-    name: gp.name || gp.Name || '',
-    price,
-    isForSale: gp.isForSale ?? gp.IsForSale ?? (price > 0),
+    name: gp.name || gp.displayName || gp.Name || '',
+    price: resolvedPrice,
+    isForSale: gp.isForSale ?? gp.IsForSale ?? (resolvedPrice > 0),
     sellerId: gp.sellerId ?? gp.seller?.id ?? gp.Creator?.Id ?? gp.creator?.id ?? gp.creatorId ?? 0,
   };
 }
@@ -328,6 +334,34 @@ export async function getGameGamepasses(
     }
   } catch (err) {
     console.warn(`[getGameGamepasses] Fallback 2 (develop.roblox.com) failed for universeId ${universeId}: ${(err as Error).message}`);
+  }
+
+  // Fallback 3: apis.roblox.com universes endpoint dengan passView=Full dan pageToken pagination
+  try {
+    let pageToken: string | null = null;
+    while (true) {
+      const url = `https://apis.roblox.com/game-passes/v1/universes/${universeId}/game-passes?passView=Full&pageSize=100${pageToken ? `&pageToken=${pageToken}` : ''}`;
+      const response = await axios.get(url, { headers });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const body = response.data as { gamePasses?: any[]; nextPageToken?: string };
+
+      if (body.gamePasses) {
+        for (const gp of body.gamePasses) {
+          gamepasses.push(parseGamepassEntry(gp));
+        }
+      }
+
+      pageToken = body.nextPageToken || null;
+      if (!pageToken) break;
+      await sleep(300);
+    }
+
+    if (gamepasses.length > 0) {
+      console.log(`[getGameGamepasses] Fallback 3 (universes game-passes) returned ${gamepasses.length} gamepass(es) for universeId ${universeId}`);
+      return gamepasses;
+    }
+  } catch (err) {
+    console.warn(`[getGameGamepasses] Fallback 3 (universes game-passes) failed for universeId ${universeId}: ${(err as Error).message}`);
   }
 
   return gamepasses;
