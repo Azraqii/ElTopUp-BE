@@ -4,6 +4,7 @@ import { prisma } from '../lib/prisma';
 import { syncUserToDatabase } from '../utils/syncUser';
 import { validateGamepassForOrder, findGamepassByPrice } from '../services/gamepassValidationService';
 import { createSnapTransaction } from '../services/midtransService';
+import { getBotRobuxBalance } from '../services/robloxBotService';
 
 const RATE_USD_PER_1K_GROSS_ROBUX = 4.7;
 const RATE_IDR_PER_USD = 16950;
@@ -528,5 +529,34 @@ export const cancelOrder = async (req: AuthRequest, res: Response): Promise<void
   } catch (err) {
     console.error('[cancelOrder] Unexpected error:', err);
     res.status(500).json({ error: 'Terjadi kesalahan internal saat membatalkan order.' });
+  }
+};
+
+// ------------------------------------------------------------------
+// GET /api/orders/check-stock?amount=XXX  — Cek ketersediaan stok Robux bot
+// ------------------------------------------------------------------
+export const checkStock = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const amount = parseInt(req.query.amount as string);
+
+    if (!amount || amount < 50 || amount > 100000) {
+      res.status(400).json({ error: 'Jumlah Robux harus antara 50 dan 100.000.' });
+      return;
+    }
+
+    const requiredRobux = Math.ceil(amount / 0.7);
+    const botBalance = await getBotRobuxBalance();
+    const available = botBalance >= requiredRobux;
+
+    res.json({
+      available,
+      requiredRobux,
+      message: available
+        ? 'Stok mencukupi.'
+        : 'Stok Robux saat ini tidak mencukupi. Silakan kurangi jumlah atau hubungi admin.',
+    });
+  } catch (err) {
+    console.error('[checkStock] Error:', err);
+    res.status(500).json({ error: 'Gagal mengecek ketersediaan stok.' });
   }
 };
