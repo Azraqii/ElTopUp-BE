@@ -3,8 +3,8 @@ import { AuthRequest } from '../middleware/authMiddleware';
 import { prisma } from '../lib/prisma';
 import { syncUserToDatabase } from '../utils/syncUser';
 import { validateGamepassForOrder, findGamepassByPrice } from '../services/gamepassValidationService';
-import { createSnapTransaction } from '../services/midtransService';
-import { getBotRobuxBalance } from '../services/robloxBotService';
+import { createSnapTransaction, getTransactionStatus } from '../services/midtransService';
+import { getBotRobuxBalance, purchaseGamepass } from '../services/robloxBotService';
 
 const RATE_IDR_PER_ROBUX = 107;
 
@@ -559,3 +559,128 @@ export const checkStock = async (req: AuthRequest, res: Response): Promise<void>
     res.status(500).json({ error: 'Gagal mengecek ketersediaan stok.' });
   }
 };
+
+// ------------------------------------------------------------------
+// POST /api/orders/:id/verify-payment  — Verifikasi langsung ke Midtrans API
+// ------------------------------------------------------------------
+export const verifyPayment = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.sub as string;
+
+    const order = await prisma.order.findUnique({ where: { id } });
+
+    if (!order) {
+      res.status(404).json({ error: 'Order tidak ditemukan.' });
+      return;
+    }
+
+    if (order.userId !== userId) {
+      res.status(403).json({ error: 'Forbidden.' });
+      return;
+    }
+
+    if (order.paymentStatus === 'PAID') {
+      res.json({ status: 'already_paid', paymentStatus: 'PAID' });
+      return;
+    }
+
+    if (order.paymentStatus !== 'UNPAID') {
+      res.json({ status: 'no_action', paymentStatus: order.paymentStatus });
+      return;
+    }
+
+    const midtransOrderId = order.midtransOrderId || order.id;
+    const txStatus = await getTransactionStatus(midtransOrderId);
+
+    console.log(`[verifyPayment] Order ${id}: transaction_status=${txStatus.transaction_status}, fraud=${txStatus.fraud_status}`);
+
+    if (
+      (txStatus.transaction_status === 'settlement' || txStatus.transaction_status === 'capture') &&
+      txStatus.fraud_status !== 'challenge'
+    ) {
+      await prisma.order.update({
+        where: { id },
+        data: { paymentStatus: 'PAID' },
+      });
+
+      await prisma.systemLog.create({
+        data: {
+          orderId: id,
+          serviceName: 'MIDTRANS',
+          eventType: 'PAYMENT_VERIFIED',
+          payloadData: { source: 'verify-payment', transactionStatus: txStatus.transaction_status },
+          status: 'SUCCESS',
+        },
+      });
+
+      console.log(`[verifyPayment] Order ${id} → PAID`);
+
+      if (order.orderType === 'ROBUX') {
+        processBotPurchaseAfterPayment(id).catch((err) => {
+          console.error(`[verifyPayment] Background bot purchase error for ${id}:`, err);
+        });
+      } else if (order.orderType === 'ITEM_GAME') {
+        await prisma.order.update({
+          where: { id },
+          data: { adminStatus: 'PENDING_ADMIN' },
+        });
+        console.log(`[verifyPayment] Order ITEM_GAME ${id} → PENDING_ADMIN`);
+      }
+
+      res.json({ status: 'paid', paymentStatus: 'PAID' });
+    } else if (txStatus.transaction_status === 'pending') {
+      res.json({ status: 'pending', paymentStatus: 'UNPAID' });
+    } else {
+      res.json({ status: 'not_paid', transactionStatus: txStatus.transaction_status });
+    }
+  } catch (err) {
+    console.error('[verifyPayment] Error:', err);
+    res.status(500).json({ error: 'Gagal memverifikasi pembayaran.' });
+  }
+};
+
+async function processBotPurchaseAfterPayment(orderId: string): Promise<void> {
+  const order = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+
+  if (!order.robloxGamepassId || order.robuxAmount === null) {
+    throw new Error(`Order ${orderId} tidak memiliki gamepassId atau robuxAmount.`);
+  }
+
+  await prisma.order.update({
+    where: { id: orderId },
+    data: { botStatus: 'PROCESSING' },
+  });
+
+  try {
+    const grossAmount = Math.ceil(order.robuxAmount / 0.7);
+    const result = await purchaseGamepass(order.robloxGamepassId, grossAmount);
+
+    if (result.success) {
+      await prisma.order.update({
+        where: { id: orderId },
+        data: { botStatus: 'COMPLETED' },
+      });
+      console.log(`[verifyPayment] Bot purchase berhasil untuk order ${orderId}`);
+    } else {
+      await prisma.order.update({
+        where: { id: orderId },
+        data: {
+          botStatus: 'FAILED',
+          botErrorMessage: result.message || 'Pembelian gagal.',
+        },
+      });
+      console.error(`[verifyPayment] Bot purchase gagal untuk order ${orderId}: ${result.message}`);
+    }
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    await prisma.order.update({
+      where: { id: orderId },
+      data: {
+        botStatus: 'FAILED',
+        botErrorMessage: errorMessage,
+      },
+    });
+    console.error(`[verifyPayment] Bot purchase error order ${orderId}:`, errorMessage);
+  }
+}

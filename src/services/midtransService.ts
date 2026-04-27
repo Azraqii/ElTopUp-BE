@@ -78,3 +78,40 @@ export const createSnapTransaction = async (
     redirectUrl: transaction.redirect_url,
   };
 };
+
+export interface MidtransTransactionStatus {
+  transaction_status: string;
+  fraud_status: string;
+  status_code: string;
+  order_id: string;
+  gross_amount: string;
+  signature_key: string;
+  payment_type: string;
+}
+
+export async function getTransactionStatus(orderId: string): Promise<MidtransTransactionStatus> {
+  const serverKey = process.env.MIDTRANS_SERVER_KEY;
+  const isProduction = process.env.MIDTRANS_IS_PRODUCTION === 'true';
+
+  if (!serverKey) {
+    throw new Error('MIDTRANS_SERVER_KEY belum di-set.');
+  }
+
+  const baseUrl = isProduction
+    ? 'https://api.midtrans.com'
+    : 'https://api.sandbox.midtrans.com';
+
+  const response = await fetch(`${baseUrl}/v2/${orderId}/status`, {
+    headers: {
+      'Accept': 'application/json',
+      'Authorization': `Basic ${Buffer.from(serverKey + ':').toString('base64')}`,
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Midtrans status check gagal: ${response.status}`);
+  }
+
+  return response.json() as Promise<MidtransTransactionStatus>;
+}
+
