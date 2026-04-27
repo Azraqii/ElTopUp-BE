@@ -131,10 +131,8 @@ export const midtransWebhook = async (req: Request, res: Response): Promise<void
 
     console.log(`[Webhook Midtrans] Received: order=${externalOrderId} status=${transactionStatus}`);
 
-    const order = await prisma.order.findFirst({
-      where: {
-        OR: [{ midtransOrderId: externalOrderId }, { id: externalOrderId }],
-      },
+    const order = await prisma.order.findUnique({
+      where: { midtransOrderId: externalOrderId },
     });
 
     if (!order) {
