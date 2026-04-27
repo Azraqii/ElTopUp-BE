@@ -6,8 +6,7 @@ import { validateGamepassForOrder, findGamepassByPrice } from '../services/gamep
 import { createSnapTransaction } from '../services/midtransService';
 import { getBotRobuxBalance } from '../services/robloxBotService';
 
-const RATE_USD_PER_1K_GROSS_ROBUX = 4.7;
-const RATE_IDR_PER_USD = 16950;
+const RATE_IDR_PER_ROBUX = 107;
 
 // ------------------------------------------------------------------
 // POST /api/orders/scan-gamepass  — Preview scan gamepass tanpa buat order
@@ -65,7 +64,7 @@ export const checkout = async (req: AuthRequest, res: Response): Promise<void> =
     }
 
     const grossRobuxAmount = Math.ceil(robuxAmount / 0.7);
-    const totalPriceIdr = Math.ceil((grossRobuxAmount / 1000) * (RATE_USD_PER_1K_GROSS_ROBUX * RATE_IDR_PER_USD));
+    const totalPriceIdr = Math.ceil(robuxAmount * RATE_IDR_PER_ROBUX);
 
     let gamepassData;
     try {

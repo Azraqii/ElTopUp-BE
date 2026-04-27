@@ -138,8 +138,8 @@ export const midtransWebhook = async (req: Request, res: Response): Promise<void
     });
 
     if (!order) {
-      console.warn(`[Webhook Midtrans] Order tidak ditemukan: ${externalOrderId}`);
-      res.status(404).json({ error: 'Order not found' });
+      console.warn(`[Webhook Midtrans] Order tidak ditemukan: ${externalOrderId} — mungkin test notification dari Midtrans.`);
+      res.status(200).json({ status: 'order not found, ignored' });
       return;
     }
 
