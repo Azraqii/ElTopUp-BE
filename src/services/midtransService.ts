@@ -1,5 +1,7 @@
 import midtransClient from 'midtrans-client';
 
+const MIDTRANS_WEBHOOK_URL = 'https://api.eltopup.id/api/webhooks/midtrans';
+
 export interface CreateSnapTransactionParams {
   midtransOrderId: string;
   grossAmountIdr: number;
@@ -35,11 +37,6 @@ export const createSnapTransaction = async (
 ): Promise<{ token: string; redirectUrl: string }> => {
   const snap = getSnapClient();
 
-  const railwayDomain = process.env.RAILWAY_PUBLIC_DOMAIN;
-  const backendUrl = railwayDomain
-    ? `https://${railwayDomain}`
-    : (process.env.BACKEND_URL || '').replace(/\/$/, '');
-
   const payload: midtransClient.SnapTransactionParameters & Record<string, unknown> = {
     transaction_details: {
       order_id: params.midtransOrderId,
@@ -59,9 +56,8 @@ export const createSnapTransaction = async (
     ],
   };
 
-  if (backendUrl) {
-    payload.override_notification_url = [`${backendUrl}/api/webhooks/midtrans`];
-  }
+  payload.override_notification_url = [MIDTRANS_WEBHOOK_URL];
+  console.log(`[Midtrans] Notification URL: ${MIDTRANS_WEBHOOK_URL}`);
 
   if (params.enabledPayments && params.enabledPayments.length > 0) {
     payload.enabled_payments = params.enabledPayments;
