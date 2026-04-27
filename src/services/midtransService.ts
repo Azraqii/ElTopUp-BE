@@ -35,6 +35,11 @@ export const createSnapTransaction = async (
 ): Promise<{ token: string; redirectUrl: string }> => {
   const snap = getSnapClient();
 
+  const railwayDomain = process.env.RAILWAY_PUBLIC_DOMAIN;
+  const backendUrl = railwayDomain
+    ? `https://${railwayDomain}`
+    : (process.env.BACKEND_URL || '').replace(/\/$/, '');
+
   const payload: midtransClient.SnapTransactionParameters & Record<string, unknown> = {
     transaction_details: {
       order_id: params.midtransOrderId,
@@ -53,6 +58,10 @@ export const createSnapTransaction = async (
       },
     ],
   };
+
+  if (backendUrl) {
+    payload.override_notification_url = [`${backendUrl}/api/webhooks/midtrans`];
+  }
 
   if (params.enabledPayments && params.enabledPayments.length > 0) {
     payload.enabled_payments = params.enabledPayments;
