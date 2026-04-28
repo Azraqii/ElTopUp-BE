@@ -270,100 +270,27 @@ export async function getGameGamepasses(
   };
 
   type GamepassEntry = { gamepassId: string; name: string; price: number; isForSale: boolean; sellerId: number };
-  let gamepasses: GamepassEntry[] = [];
+  const gamepasses: GamepassEntry[] = [];
 
-  // Endpoint utama: games.roblox.com (publik, tapi tidak return gamepass untuk game unrated)
-  let cursor: string | null = null;
-  try {
-    while (true) {
-      const urlStr = `https://games.roblox.com/v1/games/${universeId}/game-passes?sortOrder=Desc&limit=100${cursor ? `&cursor=${cursor}` : ''}`;
-      const response = await axios.get(urlStr, { headers });
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const body = response.data as { data?: any[]; nextPageCursor?: string };
-
-      if (body.data) {
-        for (const gp of body.data) {
-          gamepasses.push(parseGamepassEntry(gp));
-        }
-      }
-
-      cursor = body.nextPageCursor || null;
-      if (!cursor) break;
-      await sleep(300);
-    }
-  } catch (err) {
-    const axiosErr = err as AxiosError;
-    const status = axiosErr.response?.status;
-    if (status !== 404 && status !== 403) {
-      throw new Error(`Gagal mengambil gamepass untuk universeId ${universeId}: ${(err as Error).message}`);
-    }
-    console.warn(`[getGameGamepasses] Primary endpoint returned ${status} for universeId ${universeId}`);
-  }
-
-  if (gamepasses.length > 0) return gamepasses;
-
-  // Fallback 1: apis.roblox.com — endpoint Creator Dashboard, bisa akses gamepass meskipun game unrated
-  try {
-    const res = await axios.get(
-      `https://apis.roblox.com/game-passes/v1/game-passes?isArchived=false&universeId=${universeId}&limit=100`,
-      { headers },
-    );
+  let pageToken: string | null = null;
+  while (true) {
+    const url = `https://apis.roblox.com/game-passes/v1/universes/${universeId}/game-passes?passView=Full&pageSize=100${pageToken ? `&pageToken=${pageToken}` : ''}`;
+    const response = await axios.get(url, { headers });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const items: any[] = res.data?.data || res.data?.gamePassList || [];
-    if (items.length > 0) {
-      gamepasses = items.map(parseGamepassEntry);
-      console.log(`[getGameGamepasses] Fallback 1 (apis.roblox.com) returned ${gamepasses.length} gamepass(es) for universeId ${universeId}`);
-      return gamepasses;
-    }
-  } catch (err) {
-    console.warn(`[getGameGamepasses] Fallback 1 (apis.roblox.com) failed for universeId ${universeId}: ${(err as Error).message}`);
-  }
+    const body = response.data as { gamePasses?: any[]; nextPageToken?: string };
 
-  // Fallback 2: develop.roblox.com — development API
-  try {
-    const res = await axios.get(
-      `https://develop.roblox.com/v1/universes/${universeId}/game-passes?page=1&limit=50&sortOrder=Asc`,
-      { headers },
-    );
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const items: any[] = res.data?.data || [];
-    if (items.length > 0) {
-      gamepasses = items.map(parseGamepassEntry);
-      console.log(`[getGameGamepasses] Fallback 2 (develop.roblox.com) returned ${gamepasses.length} gamepass(es) for universeId ${universeId}`);
-      return gamepasses;
-    }
-  } catch (err) {
-    console.warn(`[getGameGamepasses] Fallback 2 (develop.roblox.com) failed for universeId ${universeId}: ${(err as Error).message}`);
-  }
-
-  // Fallback 3: apis.roblox.com universes endpoint dengan passView=Full dan pageToken pagination
-  try {
-    let pageToken: string | null = null;
-    while (true) {
-      const url = `https://apis.roblox.com/game-passes/v1/universes/${universeId}/game-passes?passView=Full&pageSize=100${pageToken ? `&pageToken=${pageToken}` : ''}`;
-      const response = await axios.get(url, { headers });
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const body = response.data as { gamePasses?: any[]; nextPageToken?: string };
-
-      if (body.gamePasses) {
-        for (const gp of body.gamePasses) {
-          gamepasses.push(parseGamepassEntry(gp));
-        }
+    if (body.gamePasses) {
+      for (const gp of body.gamePasses) {
+        gamepasses.push(parseGamepassEntry(gp));
       }
-
-      pageToken = body.nextPageToken || null;
-      if (!pageToken) break;
-      await sleep(300);
     }
 
-    if (gamepasses.length > 0) {
-      console.log(`[getGameGamepasses] Fallback 3 (universes game-passes) returned ${gamepasses.length} gamepass(es) for universeId ${universeId}`);
-      return gamepasses;
-    }
-  } catch (err) {
-    console.warn(`[getGameGamepasses] Fallback 3 (universes game-passes) failed for universeId ${universeId}: ${(err as Error).message}`);
+    pageToken = body.nextPageToken || null;
+    if (!pageToken) break;
+    await sleep(300);
   }
 
+  console.log(`[getGameGamepasses] apis.roblox.com/universes returned ${gamepasses.length} gamepass(es) for universeId ${universeId}`);
   return gamepasses;
 }
 
